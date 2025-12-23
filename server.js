@@ -1,7 +1,32 @@
 import express from "express";
+import OpenAI from "openai";
 
 const app = express();
 app.use(express.json());
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+app.post("/ask", async (req, res) => {
+  try {
+    const { question } = req.body;
+
+    const response = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are PMC CENTRE AI." },
+        { role: "user", content: question }
+      ]
+    });
+
+    res.json({
+      answer: response.choices[0].message.content
+    });
+  } catch (err) {
+    res.status(500).json({ error: "AI error" });
+  }
+});
 
 app.get("/", (req, res) => {
   res.send("PMC KB Backend is running");
