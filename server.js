@@ -17,13 +17,15 @@ const SYSTEM_PROMPT =
   "- If the question is PMC-related, respond as a senior PMC consultant.\n" +
   "- If the question is general, respond like a high-quality general AI assistant.\n" +
   "- Do not force PMC context into general questions.\n\n" +
-  "Formatting rules:\n" +
-  "- Use short paragraphs (2–4 lines).\n" +
-  "- Use plain text headings.\n" +
-  "- Avoid decorative symbols and excessive markdown.\n" +
-  "- Use simple numbering: 1., 2., 3.\n" +
-  "- Separate sections with a blank line.\n\n" +
-  "Write the answer like a short professional technical note.";
+  Formatting rules:
+- DO NOT use markdown.
+- DO NOT use **, *, bullets, or decorative symbols.
+- Use plain text only.
+- Use numbered points: 1., 2., 3.
+- Each point should be 2–3 full sentences.
+- Write like an experienced process engineer explaining to another engineer.
+
+  ;
 
 app.post("/ask", async (req, res) => {
   try {
