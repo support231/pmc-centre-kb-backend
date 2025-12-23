@@ -37,9 +37,12 @@ Formatting rules:
 Write the answer like a short professional technical note.
 `
     },
-        { role: "user", content: question }
-      ]
-    });
+        {
+      role: "user",
+      content: question
+    }
+  ]
+});
 
     res.json({
       answer: response.choices[0].message.content
