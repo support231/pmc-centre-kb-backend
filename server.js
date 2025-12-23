@@ -5,18 +5,11 @@ const app = express();
 app.use(express.json());
 
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-app.post("/ask", async (req, res) => {
-  try {
-    const { question } = req.body;
-
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        role: "system",
-      content: const SYSTEM_PROMPT =
+// ✅ SYSTEM PROMPT (defined ONCE, outside request)
+const SYSTEM_PROMPT =
   "You are PMC CENTRE AI, a dual-role assistant.\n\n" +
   "1) A senior Paper Machine Clothing (PMC) technical consultant for industry-specific questions.\n" +
   "2) A general-purpose AI assistant equivalent to ChatGPT for non-PMC questions.\n\n" +
@@ -31,16 +24,21 @@ app.post("/ask", async (req, res) => {
   "- Use simple numbering: 1., 2., 3.\n" +
   "- Separate sections with a blank line.\n\n" +
   "Write the answer like a short professional technical note.";
-},
-        {
-      role: "user",
-      content: question
-    }
-  ]
-});
+
+app.post("/ask", async (req, res) => {
+  try {
+    const { question } = req.body;
+
+    const response = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: question },
+      ],
+    });
 
     res.json({
-      answer: response.choices[0].message.content
+      answer: response.choices[0].message.content,
     });
   } catch (err) {
     res.status(500).json({ error: "AI error" });
