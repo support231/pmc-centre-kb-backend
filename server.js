@@ -12,98 +12,70 @@ const client = new OpenAI({
 });
 
 /* ===============================
-   SYSTEM PROMPTS
+   PROMPTS
    =============================== */
 
-/* ---------- KB MODE (STRICT, INTERNAL) ---------- */
+// ---- INTENT DETECTION PROMPT (VERY SMALL) ----
+const INTENT_PROMPT = `
+Classify the user question.
+
+Is this question related to Paper Machine Clothing, papermaking, paper machine sections,
+or paper industry engineering?
+
+Answer with ONE WORD only:
+PMC
+or
+GENERAL
+`;
+
+// ---- KB MODE PROMPT (STRICT) ----
 const KB_SYSTEM_PROMPT = `
 You are PMC CENTRE AI operating in STRICT KNOWLEDGE BASE MODE.
 
 Rules:
 Use ONLY the information provided in the Knowledge Base below.
-Do NOT add explanations, interpretations, examples, or mechanisms not explicitly written in the Knowledge Base.
-Do NOT rephrase or simplify technical definitions.
+Do NOT add explanations or interpretations not explicitly present.
 Preserve terminology exactly as written.
-If the answer is not explicitly present in the Knowledge Base, reply exactly:
-"This information is not defined in the PMC CENTRE Knowledge Base."
 
 Formatting rules:
 Plain text only.
-No markdown, no bullets, no symbols.
-Use numbered points only if the Knowledge Base uses them.
+No markdown or symbols.
 Tone must be technical and neutral.
 `;
 
-/* ---------- MODEL MODE (MAIN USER EXPERIENCE) ---------- */
-const MODEL_SYSTEM_PROMPT = `
+// ---- PMC MODEL MODE (WHEN KB IS NOT SUFFICIENT) ----
+const PMC_MODEL_PROMPT = `
 You are PMC CENTRE AI.
-You act as a senior Paper Machine Clothing technical consultant for PMC questions,
-and as a high-quality general AI assistant for non-PMC questions.
+You are a senior Paper Machine Clothing technology consultant with decades of industry experience.
 
 Rules:
-If the question is PMC-related, answer like an experienced PMC process or fabric engineer.
-If the question is general, answer like a professional general assistant.
-Do not force PMC context into general questions.
+Answer using established PMC engineering knowledge and industry practice.
+Be unbiased and technical.
+If the Knowledge Base does not contain this information, clearly state that
+it is not yet available in the PMC CENTRE archive.
+
+End the answer with:
+"For detailed mill-specific guidance, please contact PMC CENTRE experts at support@pmccentre.com."
 
 Formatting rules:
 Plain text only.
-No markdown or decorative symbols.
-Use numbered points when helpful.
-Tone must be technical, explanatory, and professional.
+No markdown.
+Professional tone.
 `;
 
-/* ===============================
-   PMC QUESTION DETECTOR
-   =============================== */
+// ---- GENERAL MODEL MODE ----
+const GENERAL_MODEL_PROMPT = `
+You are PMC CENTRE AI.
+You are a high-quality general AI assistant.
 
-function isPmcQuestion(question) {
-  const q = question.toLowerCase();
+Rules:
+Answer clearly and professionally.
+No PMC context unless required.
 
-  const pmcKeywords = [
-    // Paper machine / paper
-    "paper machine",
-    "paper mill",
-    "papermaking",
-    "papermaking",
-    "stock preparation",
-    "forming section",
-    "press section",
-    "dryer section",
-
-    // Paper Machine Clothing
-    "forming fabric",
-    "dryer fabric",
-    "press fabric",
-    "wire",
-    "felt",
-    "fabric",
-
-    // Fabric constructions & terms
-    "ssb",
-    "double layer",
-    "triple layer",
-    "1.5 layer",
-    "multilayer",
-    "multi layer",
-    "ps warp",
-    "ms warp",
-    "warp",
-    "weft",
-    "stacking",
-    "weft stacking",
-    "warp stacking",
-
-    // Dryer / heat
-    "dryer",
-    "spiral",
-    "heat",
-    "temperature",
-    "shrinkage",
-    "heat setting"
-  ];
-
-  return pmcKeywords.some(keyword => q.includes(keyword));
-}
+Formatting rules:
+Plain text only.
+No markdown.
+`;
 
 /* ===============================
    KB LOADER
@@ -116,19 +88,17 @@ async function loadKbText(question) {
   const q = question.toLowerCase();
   const allowedFolders = [];
 
-  // Forming KB
   if (
     q.includes("forming") ||
     q.includes("wire") ||
     q.includes("stack") ||
-    q.includes("ssb") ||
     q.includes("warp") ||
-    q.includes("weft")
+    q.includes("weft") ||
+    q.includes("ssb")
   ) {
     allowedFolders.push("forming");
   }
 
-  // Dryer KB
   if (
     q.includes("dryer") ||
     q.includes("spiral") ||
@@ -145,15 +115,13 @@ async function loadKbText(question) {
   for (const folder of allowedFolders) {
     const folderPath = path.join(kbRoot, folder);
     if (!fs.existsSync(folderPath)) continue;
-    if (!fs.statSync(folderPath).isDirectory()) continue;
 
     const files = fs.readdirSync(folderPath);
-
     for (const file of files) {
       if (!file.endsWith(".docx")) continue;
-
-      const filePath = path.join(folderPath, file);
-      const result = await mammoth.extractRawText({ path: filePath });
+      const result = await mammoth.extractRawText({
+        path: path.join(folderPath, file),
+      });
       text += "\n\n" + result.value;
     }
   }
@@ -168,18 +136,36 @@ async function loadKbText(question) {
 app.post("/ask", async (req, res) => {
   try {
     const { question } = req.body;
+    if (!question) return res.status(400).json({ error: "Invalid question" });
 
-    if (!question || typeof question !== "string") {
-      return res.status(400).json({ error: "Invalid question" });
+    /* ---- CALL 1: INTENT DETECTION ---- */
+    const intentResult = await client.chat.completions.create({
+      model: "gpt-5.2",
+      messages: [
+        { role: "system", content: INTENT_PROMPT },
+        { role: "user", content: question },
+      ],
+      max_tokens: 5,
+    });
+
+    const intent =
+      intentResult.choices[0].message.content.trim().toUpperCase();
+
+    /* ---- CALL 2: ANSWER ---- */
+
+    let systemPrompt = GENERAL_MODEL_PROMPT;
+    let kbText = "";
+
+    if (intent === "PMC") {
+      kbText = await loadKbText(question);
+
+      if (kbText.length > 0) {
+        systemPrompt =
+          KB_SYSTEM_PROMPT + "\n\nKnowledge Base:\n" + kbText;
+      } else {
+        systemPrompt = PMC_MODEL_PROMPT;
+      }
     }
-
-    const pmcRelated = isPmcQuestion(question);
-    const kbText = pmcRelated ? await loadKbText(question) : "";
-
-    const systemPrompt =
-      pmcRelated && kbText.length > 0
-        ? KB_SYSTEM_PROMPT + "\n\nKnowledge Base:\n" + kbText
-        : MODEL_SYSTEM_PROMPT;
 
     const response = await client.chat.completions.create({
       model: "gpt-5.2",
