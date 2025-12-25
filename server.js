@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+import mammoth from "mammoth";
 import express from "express";
 import OpenAI from "openai";
 
@@ -8,7 +11,7 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// ✅ SYSTEM PROMPT (defined ONCE, outside request)
+// ===== SYSTEM PROMPT =====
 const SYSTEM_PROMPT =
   "You are PMC CENTRE AI. " +
   "You act as a senior Paper Machine Clothing technical consultant for PMC questions, " +
@@ -27,16 +30,64 @@ const SYSTEM_PROMPT =
   "Each point must have 2 to 3 complete sentences. " +
   "Tone must be technical, explanatory, and professional.";
 
- 
+// ===== KB LOADER =====
+async function loadKbText(question) {
+  const kbRoot = path.join(process.cwd(), "kb");
+  if (!fs.existsSync(kbRoot)) return "";
 
+  const q = question.toLowerCase();
+  const allowedFolders = [];
+
+  // Forming KB
+  if (q.includes("forming") || q.includes("wire") || q.includes("stack")) {
+    allowedFolders.push("forming");
+  }
+
+  // Dryer KB
+  if (q.includes("dryer") || q.includes("spiral") || q.includes("heat")) {
+    allowedFolders.push("dryer");
+  }
+
+  if (allowedFolders.length === 0) return "";
+
+  let text = "";
+
+  for (const folder of allowedFolders) {
+    const folderPath = path.join(kbRoot, folder);
+    if (!fs.existsSync(folderPath)) continue;
+    if (!fs.statSync(folderPath).isDirectory()) continue;
+
+    const files = fs.readdirSync(folderPath);
+
+    for (const file of files) {
+      if (!file.endsWith(".docx")) continue;
+
+      const filePath = path.join(folderPath, file);
+      const result = await mammoth.extractRawText({ path: filePath });
+      text += "\n\n" + result.value;
+    }
+  }
+
+  return text;
+}
+
+// ===== ASK ENDPOINT =====
 app.post("/ask", async (req, res) => {
   try {
     const { question } = req.body;
 
+    const kbText = await loadKbText(question);
+
     const response = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "system",
+          content:
+            kbText.length > 0
+              ? SYSTEM_PROMPT + "\n\nKnowledge Base:\n" + kbText
+              : SYSTEM_PROMPT,
+        },
         { role: "user", content: question },
       ],
     });
@@ -49,6 +100,7 @@ app.post("/ask", async (req, res) => {
   }
 });
 
+// ===== HEALTH CHECK =====
 app.get("/", (req, res) => {
   res.send("PMC KB Backend is running");
 });
