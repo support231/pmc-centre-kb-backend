@@ -79,7 +79,7 @@ app.post("/ask", async (req, res) => {
     const kbText = await loadKbText(question);
 
     const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5.2",
       messages: [
         {
           role: "system",
