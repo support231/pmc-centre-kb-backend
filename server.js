@@ -11,34 +11,51 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// ===== SYSTEM PROMPT =====
-const SYSTEM_PROMPT =
-  "You are PMC CENTRE AI. " +
-  "You act as a senior Paper Machine Clothing technical consultant for PMC questions, " +
-  "and as a high-quality general AI assistant for non-PMC questions. " +
+/* ===============================
+   SYSTEM PROMPTS
+   =============================== */
 
-  "Rules: " +
-  "If the question is PMC-related, answer like an experienced PMC process or fabric engineer. " +
-  "If the question is general, answer like a professional general assistant. " +
-  "Do not force PMC context into general questions. " +
+/* ---------- KB MODE (STRICT, INTERNAL) ---------- */
+const KB_SYSTEM_PROMPT = `
+You are PMC CENTRE AI operating in STRICT KNOWLEDGE BASE MODE.
 
-  + " Knowledge Base enforcement rules: " +
-+ "If Knowledge Base content is provided, you MUST base definitions, explanations, and terminology strictly on it. " +
-+ "Do NOT introduce concepts, mechanisms, or explanations that are not explicitly present in the Knowledge Base. " +
-+ "Use the Knowledge Base wording and structure as the primary reference. " +
-+ "Preserve domain-specific terms exactly as written (e.g. stacking, SSB, PS warp, MS warp, weft stacking). " +
-+ "If general knowledge differs from the Knowledge Base, the Knowledge Base always takes priority. "+
+Rules:
+Use ONLY the information provided in the Knowledge Base below.
+Do NOT add explanations, interpretations, examples, or mechanisms not explicitly written in the Knowledge Base.
+Do NOT rephrase or simplify technical definitions.
+Preserve terminology exactly as written.
+If the answer is not explicitly present in the Knowledge Base, reply exactly:
+"This information is not defined in the PMC CENTRE Knowledge Base."
 
+Formatting rules:
+Plain text only.
+No markdown, no bullets, no symbols.
+Use numbered points only if the Knowledge Base uses them.
+Tone must be technical and neutral.
+`;
 
-  "Formatting rules: " +
-  "Do not use markdown. " +
-  "Do not use asterisks, stars, bullets, or decorative symbols. " +
-  "Use plain text only. " +
-  "Use numbered points like 1., 2., 3. when needed. " +
-  "Each point must have 2 to 3 complete sentences. " +
-  "Tone must be technical, explanatory, and professional.";
+/* ---------- MODEL MODE (MAIN USER EXPERIENCE) ---------- */
+const MODEL_SYSTEM_PROMPT = `
+You are PMC CENTRE AI.
+You act as a senior Paper Machine Clothing technical consultant for PMC questions,
+and as a high-quality general AI assistant for non-PMC questions.
 
-// ===== KB LOADER =====
+Rules:
+If the question is PMC-related, answer like an experienced PMC process or fabric engineer.
+If the question is general, answer like a professional general assistant.
+Do not force PMC context into general questions.
+
+Formatting rules:
+Plain text only.
+No markdown or decorative symbols.
+Use numbered points when helpful.
+Tone must be technical, explanatory, and professional.
+`;
+
+/* ===============================
+   KB LOADER
+   =============================== */
+
 async function loadKbText(question) {
   const kbRoot = path.join(process.cwd(), "kb");
   if (!fs.existsSync(kbRoot)) return "";
@@ -76,26 +93,32 @@ async function loadKbText(question) {
     }
   }
 
-  return text;
+  return text.trim();
 }
 
-// ===== ASK ENDPOINT =====
+/* ===============================
+   ASK ENDPOINT
+   =============================== */
+
 app.post("/ask", async (req, res) => {
   try {
     const { question } = req.body;
 
+    if (!question || typeof question !== "string") {
+      return res.status(400).json({ error: "Invalid question" });
+    }
+
     const kbText = await loadKbText(question);
+
+    const systemPrompt =
+      kbText.length > 0
+        ? KB_SYSTEM_PROMPT + "\n\nKnowledge Base:\n" + kbText
+        : MODEL_SYSTEM_PROMPT;
 
     const response = await client.chat.completions.create({
       model: "gpt-5.2",
       messages: [
-        {
-          role: "system",
-          content:
-            kbText.length > 0
-              ? SYSTEM_PROMPT + "\n\nKnowledge Base:\n" + kbText
-              : SYSTEM_PROMPT,
-        },
+        { role: "system", content: systemPrompt },
         { role: "user", content: question },
       ],
     });
@@ -104,11 +127,15 @@ app.post("/ask", async (req, res) => {
       answer: response.choices[0].message.content,
     });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "AI error" });
   }
 });
 
-// ===== HEALTH CHECK =====
+/* ===============================
+   HEALTH CHECK
+   =============================== */
+
 app.get("/", (req, res) => {
   res.send("PMC KB Backend is running");
 });
