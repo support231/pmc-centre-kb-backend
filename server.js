@@ -9,15 +9,13 @@ const client = new OpenAI({
 });
 
 /* ===============================
-   PROMPTS
+   PROMPTS (PLAIN STRING ONLY)
    =============================== */
 
-// ---- INTENT DETECTION PROMPT (CALL 1) ----
-const INTENT_PROMPT = `
-You are classifying user intent.
+const INTENT_PROMPT_PREFIX = `
+Classify the following user question.
 
-Question:
-Is the user's question related to:
+If it is related to:
 - Paper Machine Clothing
 - Papermaking technology
 - Paper machine sections
@@ -27,10 +25,11 @@ Answer with ONE WORD ONLY:
 PMC
 or
 GENERAL
+
+User question:
 `;
 
-// ---- ANSWER PROMPT (CALL 2) ----
-const ANSWER_SYSTEM_PROMPT = `
+const ANSWER_PROMPT_PREFIX = `
 You are PMC CENTRE AI.
 
 Rules:
@@ -39,7 +38,8 @@ Rules:
 - Do NOT use markdown.
 - Do NOT use asterisks (*).
 - Do NOT use bullet symbols.
-- Use short paragraphs or numbered points only if required.
+
+User question:
 `;
 
 /* ===============================
@@ -63,22 +63,11 @@ app.post("/ask", async (req, res) => {
 
     const intentResponse = await client.responses.create({
       model: "gpt-4.1-mini",
-      input: [
-        {
-          role: "system",
-          content: INTENT_PROMPT,
-        },
-        {
-          role: "user",
-          content: question,
-        },
-      ],
+      input: INTENT_PROMPT_PREFIX + question,
       max_output_tokens: 10,
     });
 
-    const intentRaw =
-      intentResponse.output_text || "GENERAL";
-
+    const intentRaw = intentResponse.output_text || "GENERAL";
     const intent = intentRaw.toUpperCase().includes("PMC")
       ? "PMC"
       : "GENERAL";
@@ -90,16 +79,7 @@ app.post("/ask", async (req, res) => {
 
     const answerResponse = await client.responses.create({
       model: "gpt-4.1-mini",
-      input: [
-        {
-          role: "system",
-          content: ANSWER_SYSTEM_PROMPT,
-        },
-        {
-          role: "user",
-          content: question,
-        },
-      ],
+      input: ANSWER_PROMPT_PREFIX + question,
     });
 
     const answer =
@@ -111,7 +91,7 @@ app.post("/ask", async (req, res) => {
       answer,
     });
   } catch (err) {
-    console.error("BACKEND ERROR:", err);
+    console.error("FULL BACKEND ERROR:", err);
     res.json({
       answer:
         "Backend error occurred. Please check Render logs.",
