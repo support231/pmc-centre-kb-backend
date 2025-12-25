@@ -53,6 +53,59 @@ Tone must be technical, explanatory, and professional.
 `;
 
 /* ===============================
+   PMC QUESTION DETECTOR
+   =============================== */
+
+function isPmcQuestion(question) {
+  const q = question.toLowerCase();
+
+  const pmcKeywords = [
+    // Paper machine / paper
+    "paper machine",
+    "paper mill",
+    "papermaking",
+    "papermaking",
+    "stock preparation",
+    "forming section",
+    "press section",
+    "dryer section",
+
+    // Paper Machine Clothing
+    "forming fabric",
+    "dryer fabric",
+    "press fabric",
+    "wire",
+    "felt",
+    "fabric",
+
+    // Fabric constructions & terms
+    "ssb",
+    "double layer",
+    "triple layer",
+    "1.5 layer",
+    "multilayer",
+    "multi layer",
+    "ps warp",
+    "ms warp",
+    "warp",
+    "weft",
+    "stacking",
+    "weft stacking",
+    "warp stacking",
+
+    // Dryer / heat
+    "dryer",
+    "spiral",
+    "heat",
+    "temperature",
+    "shrinkage",
+    "heat setting"
+  ];
+
+  return pmcKeywords.some(keyword => q.includes(keyword));
+}
+
+/* ===============================
    KB LOADER
    =============================== */
 
@@ -64,12 +117,24 @@ async function loadKbText(question) {
   const allowedFolders = [];
 
   // Forming KB
-  if (q.includes("forming") || q.includes("wire") || q.includes("stack")) {
+  if (
+    q.includes("forming") ||
+    q.includes("wire") ||
+    q.includes("stack") ||
+    q.includes("ssb") ||
+    q.includes("warp") ||
+    q.includes("weft")
+  ) {
     allowedFolders.push("forming");
   }
 
   // Dryer KB
-  if (q.includes("dryer") || q.includes("spiral") || q.includes("heat")) {
+  if (
+    q.includes("dryer") ||
+    q.includes("spiral") ||
+    q.includes("heat") ||
+    q.includes("shrink")
+  ) {
     allowedFolders.push("dryer");
   }
 
@@ -108,10 +173,11 @@ app.post("/ask", async (req, res) => {
       return res.status(400).json({ error: "Invalid question" });
     }
 
-    const kbText = await loadKbText(question);
+    const pmcRelated = isPmcQuestion(question);
+    const kbText = pmcRelated ? await loadKbText(question) : "";
 
     const systemPrompt =
-      kbText.length > 0
+      pmcRelated && kbText.length > 0
         ? KB_SYSTEM_PROMPT + "\n\nKnowledge Base:\n" + kbText
         : MODEL_SYSTEM_PROMPT;
 
