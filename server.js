@@ -9,30 +9,21 @@ const client = new OpenAI({
 });
 
 /* ===============================
-   PROMPTS (PLAIN STRING ONLY)
+   PROMPTS
    =============================== */
 
-const INTENT_PROMPT_PREFIX =
-  "Classify the following user question.\n\n" +
-  "If it is related to:\n" +
-  "- Paper Machine Clothing\n" +
-  "- Papermaking technology\n" +
-  "- Paper machine sections\n" +
-  "- Paper industry engineering\n\n" +
+const INTENT_PROMPT =
+  "Classify the following user question.\n" +
   "Answer with ONE WORD ONLY:\n" +
-  "PMC\n" +
-  "or\n" +
-  "GENERAL\n\n" +
+  "PMC or GENERAL\n\n" +
   "User question:\n";
 
-const ANSWER_PROMPT_PREFIX =
-  "You are PMC CENTRE AI.\n\n" +
+const ANSWER_PROMPT =
+  "You are PMC CENTRE AI.\n" +
   "Rules:\n" +
-  "- Answer clearly and professionally.\n" +
-  "- Use plain text only.\n" +
-  "- Do NOT use markdown.\n" +
-  "- Do NOT use asterisks.\n" +
-  "- Do NOT use bullet symbols.\n\n" +
+  "- Plain text only\n" +
+  "- No markdown\n" +
+  "- No asterisks\n\n" +
   "User question:\n";
 
 /* ===============================
@@ -40,58 +31,52 @@ const ANSWER_PROMPT_PREFIX =
    =============================== */
 
 app.post("/ask", async (req, res) => {
+  const question =
+    req.body.question ||
+    req.body.prompt ||
+    req.body.text ||
+    "";
+
+  if (!question.trim()) {
+    return res.json({ answer: "No question received." });
+  }
+
   try {
-    const question =
-      req.body.question ||
-      req.body.prompt ||
-      req.body.text ||
-      "";
-
-    if (!question.trim()) {
-      return res.json({ answer: "No question received." });
-    }
-
-    /* ========= CALL 1: INTENT ========= */
-    console.log("OPENAI CALL #1 — INTENT START");
+    console.log("CALL 1 START — INTENT");
 
     const intentResponse = await client.responses.create({
-      model: "gpt-4.1-mini",
-      input: INTENT_PROMPT_PREFIX + question,
+      model: "gpt-5.2", // DO NOT CHANGE YET
+      input: INTENT_PROMPT + question,
       max_output_tokens: 5,
     });
 
-    const intentText =
-      intentResponse.output_text?.trim() || "GENERAL";
-
     const intent =
-      intentText.toUpperCase().includes("PMC")
+      intentResponse.output_text?.toUpperCase().includes("PMC")
         ? "PMC"
         : "GENERAL";
 
-    console.log("OPENAI CALL #1 — INTENT RESULT:", intent);
+    console.log("CALL 1 OK — INTENT:", intent);
 
-    /* ========= CALL 2: ANSWER ========= */
-    console.log("OPENAI CALL #2 — ANSWER START");
+    console.log("CALL 2 START — ANSWER");
 
     const answerResponse = await client.responses.create({
-      model: "gpt-4.1-mini",
-      input: ANSWER_PROMPT_PREFIX + question,
+      model: "gpt-4.1-mini", // DO NOT CHANGE YET
+      input: ANSWER_PROMPT + question,
       max_output_tokens: 600,
     });
 
     const answer =
-      answerResponse.output_text?.trim() ||
-      "No answer returned from OpenAI.";
+      answerResponse.output_text || "No answer returned.";
 
-    console.log("OPENAI CALL #2 — ANSWER COMPLETE");
+    console.log("CALL 2 OK — ANSWER");
 
-    res.json({
-      intent,
-      answer,
-    });
+    res.json({ intent, answer });
 
   } catch (err) {
-    console.error("FULL BACKEND ERROR:", err);
+    console.error("❌ OPENAI ERROR MESSAGE:", err.message);
+    console.error("❌ OPENAI ERROR STACK:", err.stack);
+    console.error("❌ FULL ERROR OBJECT:", JSON.stringify(err, null, 2));
+
     res.status(500).json({
       answer: "Backend error occurred. Please check Render logs.",
     });
@@ -99,10 +84,10 @@ app.post("/ask", async (req, res) => {
 });
 
 /* ===============================
-   HEALTH CHECK
+   HEALTH
    =============================== */
 
-app.get("/", (req, res) => {
+app.get("/", (_, res) => {
   res.send("PMC CENTRE AI backend running");
 });
 
