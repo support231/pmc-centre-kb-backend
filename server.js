@@ -25,7 +25,6 @@ const ADANUR_PREFIX = "PaperMachineClothingAdanur_";
 
 const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 200;
-const TOP_K = 5;
 
 /* ===============================
    FILE SCAN & CLASSIFICATION
@@ -97,23 +96,16 @@ function chunkText(text) {
 }
 
 /* ===============================
-   VECTOR MATH
+   VECTOR STORE
    =============================== */
 
-function cosineSimilarity(a, b) {
-  const dot = a.reduce((sum, val, i) => sum + val * b[i], 0);
-  const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
-  const magB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
-  return dot / (magA * magB);
-}
+let kbChunks = [];
 
 /* ===============================
-   PIPELINE: LOAD → EMBED → TEST
+   PIPELINE: LOAD → EMBED
    =============================== */
 
 console.log("🔹 EMBEDDINGS PIPELINE START");
-
-let kbChunks = [];
 
 (async () => {
   try {
@@ -138,54 +130,26 @@ let kbChunks = [];
         });
       }
 
-      console.log(
-        `📄 ${file.filename} → ${chunks.length} chunks embedded`
-      );
+      console.log(`📄 ${file.filename} → ${chunks.length} chunks embedded`);
     }
 
     console.log("✅ EMBEDDINGS READY");
     console.log("📚 TOTAL CHUNKS:", kbChunks.length);
 
-    /* ===============================
-       AUTO RETRIEVAL SELF-TEST
-       =============================== */
-
-    const testQuestion = "What is stacking in SSB forming fabric?";
-
-    const testEmbedding = await openai.embeddings.create({
-      model: "text-embedding-3-large",
-      input: testQuestion
-    });
-
-    const testVector = testEmbedding.data[0].embedding;
-
-    const scored = kbChunks.map(chunk => ({
-      ...chunk,
-      score: cosineSimilarity(testVector, chunk.embedding)
-    }));
-
-    const top = scored
-      .sort((a, b) => b.score - a.score)
-      .slice(0, TOP_K);
-
-    console.log("🔍 AUTO RETRIEVAL TEST RESULTS:");
-    top.forEach(t => {
-      console.log(
-        ` - ${t.filename} | section=${t.section} | type=${t.kb_type} | score=${t.score.toFixed(3)}`
-      );
-    });
-
   } catch (err) {
-    console.error("❌ PIPELINE ERROR:", err);
+    console.error("❌ EMBEDDING PIPELINE ERROR:", err);
   }
 })();
 
 /* ===============================
-   DUMMY ENDPOINT (SAFE)
+   SAFE PLACEHOLDER ENDPOINT
    =============================== */
 
 app.post("/ask", (_, res) => {
-  res.json({ status: "Backend running. Retrieval tested in logs." });
+  res.json({
+    status: "Retrieval engine ready",
+    chunks_loaded: kbChunks.length
+  });
 });
 
 /* ===============================
@@ -193,7 +157,7 @@ app.post("/ask", (_, res) => {
    =============================== */
 
 app.get("/", (_, res) => {
-  res.send("PMC CENTRE AI backend running (Embeddings + Retrieval Self-Test)");
+  res.send("PMC CENTRE AI backend running (Clean Retrieval Engine)");
 });
 
 const PORT = process.env.PORT || 3000;
