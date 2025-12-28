@@ -22,12 +22,13 @@ const openai = new OpenAI({
 
 const KB_ROOT = path.join(process.cwd(), "KB");
 const ADANUR_PREFIX = "PaperMachineClothingAdanur_";
-const CHUNK_SIZE = 1200;     // characters
-const CHUNK_OVERLAP = 200;   // characters
+
+const CHUNK_SIZE = 1200;
+const CHUNK_OVERLAP = 200;
 const TOP_K = 5;
 
 /* ===============================
-   UTILITIES
+   FILE SCAN & CLASSIFICATION
    =============================== */
 
 function scanKB(dirPath, collected = []) {
@@ -57,6 +58,10 @@ function classifyFile(filePath) {
   return { filename, ext, kb_type, section, path: filePath };
 }
 
+/* ===============================
+   TEXT EXTRACTION
+   =============================== */
+
 async function extractText(file) {
   if (file.ext === ".docx") {
     const result = await mammoth.extractRawText({ path: file.path });
@@ -71,6 +76,10 @@ async function extractText(file) {
 
   return "";
 }
+
+/* ===============================
+   CHUNKING
+   =============================== */
 
 function chunkText(text) {
   const chunks = [];
@@ -87,6 +96,10 @@ function chunkText(text) {
   return chunks;
 }
 
+/* ===============================
+   VECTOR MATH
+   =============================== */
+
 function cosineSimilarity(a, b) {
   const dot = a.reduce((sum, val, i) => sum + val * b[i], 0);
   const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
@@ -95,7 +108,7 @@ function cosineSimilarity(a, b) {
 }
 
 /* ===============================
-   LOAD → EXTRACT → CHUNK → EMBED
+   PIPELINE: LOAD → EMBED → TEST
    =============================== */
 
 console.log("🔹 EMBEDDINGS PIPELINE START");
@@ -133,54 +146,46 @@ let kbChunks = [];
     console.log("✅ EMBEDDINGS READY");
     console.log("📚 TOTAL CHUNKS:", kbChunks.length);
 
+    /* ===============================
+       AUTO RETRIEVAL SELF-TEST
+       =============================== */
+
+    const testQuestion = "What is stacking in SSB forming fabric?";
+
+    const testEmbedding = await openai.embeddings.create({
+      model: "text-embedding-3-large",
+      input: testQuestion
+    });
+
+    const testVector = testEmbedding.data[0].embedding;
+
+    const scored = kbChunks.map(chunk => ({
+      ...chunk,
+      score: cosineSimilarity(testVector, chunk.embedding)
+    }));
+
+    const top = scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, TOP_K);
+
+    console.log("🔍 AUTO RETRIEVAL TEST RESULTS:");
+    top.forEach(t => {
+      console.log(
+        ` - ${t.filename} | section=${t.section} | type=${t.kb_type} | score=${t.score.toFixed(3)}`
+      );
+    });
+
   } catch (err) {
-    console.error("❌ EMBEDDING PIPELINE ERROR:", err);
+    console.error("❌ PIPELINE ERROR:", err);
   }
 })();
 
 /* ===============================
-   RETRIEVAL ENDPOINT (TEST ONLY)
+   DUMMY ENDPOINT (SAFE)
    =============================== */
 
-app.post("/retrieve", async (req, res) => {
-  const question = req.body.question || "";
-
-  if (!question.trim()) {
-    return res.json({ error: "No question provided" });
-  }
-
-  const qEmbedding = await openai.embeddings.create({
-    model: "text-embedding-3-large",
-    input: question
-  });
-
-  const queryVector = qEmbedding.data[0].embedding;
-
-  const scored = kbChunks.map(chunk => ({
-    ...chunk,
-    score: cosineSimilarity(queryVector, chunk.embedding)
-  }));
-
-  const top = scored
-    .sort((a, b) => b.score - a.score)
-    .slice(0, TOP_K);
-
-  console.log("🔍 RETRIEVAL RESULTS:");
-  top.forEach(t => {
-    console.log(
-      ` - ${t.filename} | section=${t.section} | score=${t.score.toFixed(3)}`
-    );
-  });
-
-  res.json({
-    top_matches: top.map(t => ({
-      filename: t.filename,
-      section: t.section,
-      kb_type: t.kb_type,
-      score: t.score,
-      preview: t.text.slice(0, 300)
-    }))
-  });
+app.post("/ask", (_, res) => {
+  res.json({ status: "Backend running. Retrieval tested in logs." });
 });
 
 /* ===============================
@@ -188,7 +193,7 @@ app.post("/retrieve", async (req, res) => {
    =============================== */
 
 app.get("/", (_, res) => {
-  res.send("PMC CENTRE AI backend running (Embeddings v1)");
+  res.send("PMC CENTRE AI backend running (Embeddings + Retrieval Self-Test)");
 });
 
 const PORT = process.env.PORT || 3000;
