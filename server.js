@@ -1,34 +1,30 @@
 import fs from "fs";
 import path from "path";
 import express from "express";
+import mammoth from "mammoth";
+import pdfParse from "pdf-parse";
 
 const app = express();
 app.use(express.json());
 
 /* ===============================
-   KB LOADER CONFIG
+   KB CONFIG
    =============================== */
 
 const KB_ROOT = path.join(process.cwd(), "KB");
 const ADANUR_PREFIX = "PaperMachineClothingAdanur_";
 
 /* ===============================
-   KB SCAN LOGIC
+   KB SCAN
    =============================== */
 
 function scanKB(dirPath, collected = []) {
   const items = fs.readdirSync(dirPath, { withFileTypes: true });
-
   for (const item of items) {
     const fullPath = path.join(dirPath, item.name);
-
-    if (item.isDirectory()) {
-      scanKB(fullPath, collected);
-    } else {
-      collected.push(fullPath);
-    }
+    if (item.isDirectory()) scanKB(fullPath, collected);
+    else collected.push(fullPath);
   }
-
   return collected;
 }
 
@@ -37,82 +33,90 @@ function classifyFile(filePath) {
   const ext = path.extname(filename).toLowerCase();
 
   let kb_type = "practical_kb";
-
   if (ext === ".pdf" && filename.startsWith(ADANUR_PREFIX)) {
     kb_type = "reference_book";
   }
 
   let section = "general";
+  if (filePath.includes(`${path.sep}Forming${path.sep}`)) section = "forming";
+  else if (filePath.includes(`${path.sep}Felt${path.sep}`)) section = "felt";
+  else if (filePath.includes(`${path.sep}Dryer${path.sep}`)) section = "dryer";
 
-  if (filePath.includes(`${path.sep}Forming${path.sep}`)) {
-    section = "forming";
-  } else if (filePath.includes(`${path.sep}Felt${path.sep}`)) {
-    section = "felt";
-  } else if (filePath.includes(`${path.sep}Dryer${path.sep}`)) {
-    section = "dryer";
-  }
-
-  return {
-    filename,
-    kb_type,
-    section,
-    path: filePath,
-  };
+  return { filename, ext, kb_type, section, path: filePath };
 }
 
 /* ===============================
-   LOAD KB ON STARTUP
+   TEXT EXTRACTION
    =============================== */
 
-console.log("🔹 KB LOADER START");
+async function extractText(file) {
+  if (file.ext === ".docx") {
+    const result = await mammoth.extractRawText({ path: file.path });
+    return result.value || "";
+  }
 
-let kbFiles = [];
+  if (file.ext === ".pdf") {
+    const buffer = fs.readFileSync(file.path);
+    const data = await pdfParse(buffer);
+    return data.text || "";
+  }
 
-try {
-  const allFiles = scanKB(KB_ROOT);
-  kbFiles = allFiles.map(classifyFile);
-
-  const practicalCount = kbFiles.filter(
-    f => f.kb_type === "practical_kb"
-  ).length;
-
-  const referenceCount = kbFiles.filter(
-    f => f.kb_type === "reference_book"
-  ).length;
-
-  console.log("✅ KB ROOT:", KB_ROOT);
-  console.log("📚 TOTAL FILES:", kbFiles.length);
-  console.log("📄 PRACTICAL KB FILES:", practicalCount);
-  console.log("📘 REFERENCE BOOK FILES:", referenceCount);
-
-  console.log("🔍 KB INVENTORY:");
-  kbFiles.forEach(f => {
-    console.log(
-      ` - ${f.filename} | type=${f.kb_type} | section=${f.section}`
-    );
-  });
-
-} catch (err) {
-  console.error("❌ KB LOADER ERROR:", err);
+  return "";
 }
+
+/* ===============================
+   LOAD + EXTRACT KB
+   =============================== */
+
+console.log("🔹 KB TEXT EXTRACTION START");
+
+let kbDocuments = [];
+
+(async () => {
+  try {
+    const files = scanKB(KB_ROOT).map(classifyFile);
+
+    for (const file of files) {
+      const text = await extractText(file);
+
+      kbDocuments.push({
+        filename: file.filename,
+        kb_type: file.kb_type,
+        section: file.section,
+        text,
+        text_length: text.length
+      });
+
+      console.log(
+        `📄 ${file.filename} | type=${file.kb_type} | section=${file.section} | chars=${text.length}`
+      );
+    }
+
+    console.log("✅ KB TEXT EXTRACTION COMPLETE");
+    console.log("📚 DOCUMENTS READY:", kbDocuments.length);
+
+  } catch (err) {
+    console.error("❌ TEXT EXTRACTION ERROR:", err);
+  }
+})();
 
 /* ===============================
    ASK ENDPOINT (SAFE STUB)
    =============================== */
 
-app.post("/ask", (req, res) => {
+app.post("/ask", (_, res) => {
   res.json({
-    status: "KB loaded successfully",
-    kb_files_loaded: kbFiles.length
+    status: "KB text loaded",
+    documents: kbDocuments.length
   });
 });
 
 /* ===============================
-   HEALTH CHECK
+   HEALTH
    =============================== */
 
 app.get("/", (_, res) => {
-  res.send("PMC CENTRE AI backend running (KB Loader v1)");
+  res.send("PMC CENTRE AI backend running (Text Extraction v1)");
 });
 
 const PORT = process.env.PORT || 3000;
