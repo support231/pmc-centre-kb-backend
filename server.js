@@ -3,9 +3,18 @@ import path from "path";
 import express from "express";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
+import OpenAI from "openai";
 
 const app = express();
 app.use(express.json());
+
+/* ===============================
+   OPENAI CLIENT (EMBEDDINGS ONLY)
+   =============================== */
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 /* ===============================
    KB CONFIG
@@ -13,9 +22,12 @@ app.use(express.json());
 
 const KB_ROOT = path.join(process.cwd(), "KB");
 const ADANUR_PREFIX = "PaperMachineClothingAdanur_";
+const CHUNK_SIZE = 1200;     // characters
+const CHUNK_OVERLAP = 200;   // characters
+const TOP_K = 5;
 
 /* ===============================
-   KB SCAN
+   UTILITIES
    =============================== */
 
 function scanKB(dirPath, collected = []) {
@@ -45,10 +57,6 @@ function classifyFile(filePath) {
   return { filename, ext, kb_type, section, path: filePath };
 }
 
-/* ===============================
-   TEXT EXTRACTION
-   =============================== */
-
 async function extractText(file) {
   if (file.ext === ".docx") {
     const result = await mammoth.extractRawText({ path: file.path });
@@ -64,13 +72,35 @@ async function extractText(file) {
   return "";
 }
 
+function chunkText(text) {
+  const chunks = [];
+  let start = 0;
+
+  while (start < text.length) {
+    const end = start + CHUNK_SIZE;
+    const chunk = text.slice(start, end).trim();
+    if (chunk.length > 200) chunks.push(chunk);
+    start = end - CHUNK_OVERLAP;
+    if (start < 0) start = 0;
+  }
+
+  return chunks;
+}
+
+function cosineSimilarity(a, b) {
+  const dot = a.reduce((sum, val, i) => sum + val * b[i], 0);
+  const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
+  const magB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
+  return dot / (magA * magB);
+}
+
 /* ===============================
-   LOAD + EXTRACT KB
+   LOAD → EXTRACT → CHUNK → EMBED
    =============================== */
 
-console.log("🔹 KB TEXT EXTRACTION START");
+console.log("🔹 EMBEDDINGS PIPELINE START");
 
-let kbDocuments = [];
+let kbChunks = [];
 
 (async () => {
   try {
@@ -78,36 +108,78 @@ let kbDocuments = [];
 
     for (const file of files) {
       const text = await extractText(file);
+      const chunks = chunkText(text);
 
-      kbDocuments.push({
-        filename: file.filename,
-        kb_type: file.kb_type,
-        section: file.section,
-        text,
-        text_length: text.length
-      });
+      for (const chunk of chunks) {
+        const emb = await openai.embeddings.create({
+          model: "text-embedding-3-large",
+          input: chunk
+        });
+
+        kbChunks.push({
+          embedding: emb.data[0].embedding,
+          text: chunk,
+          filename: file.filename,
+          kb_type: file.kb_type,
+          section: file.section
+        });
+      }
 
       console.log(
-        `📄 ${file.filename} | type=${file.kb_type} | section=${file.section} | chars=${text.length}`
+        `📄 ${file.filename} → ${chunks.length} chunks embedded`
       );
     }
 
-    console.log("✅ KB TEXT EXTRACTION COMPLETE");
-    console.log("📚 DOCUMENTS READY:", kbDocuments.length);
+    console.log("✅ EMBEDDINGS READY");
+    console.log("📚 TOTAL CHUNKS:", kbChunks.length);
 
   } catch (err) {
-    console.error("❌ TEXT EXTRACTION ERROR:", err);
+    console.error("❌ EMBEDDING PIPELINE ERROR:", err);
   }
 })();
 
 /* ===============================
-   ASK ENDPOINT (SAFE STUB)
+   RETRIEVAL ENDPOINT (TEST ONLY)
    =============================== */
 
-app.post("/ask", (_, res) => {
+app.post("/retrieve", async (req, res) => {
+  const question = req.body.question || "";
+
+  if (!question.trim()) {
+    return res.json({ error: "No question provided" });
+  }
+
+  const qEmbedding = await openai.embeddings.create({
+    model: "text-embedding-3-large",
+    input: question
+  });
+
+  const queryVector = qEmbedding.data[0].embedding;
+
+  const scored = kbChunks.map(chunk => ({
+    ...chunk,
+    score: cosineSimilarity(queryVector, chunk.embedding)
+  }));
+
+  const top = scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, TOP_K);
+
+  console.log("🔍 RETRIEVAL RESULTS:");
+  top.forEach(t => {
+    console.log(
+      ` - ${t.filename} | section=${t.section} | score=${t.score.toFixed(3)}`
+    );
+  });
+
   res.json({
-    status: "KB text loaded",
-    documents: kbDocuments.length
+    top_matches: top.map(t => ({
+      filename: t.filename,
+      section: t.section,
+      kb_type: t.kb_type,
+      score: t.score,
+      preview: t.text.slice(0, 300)
+    }))
   });
 });
 
@@ -116,7 +188,7 @@ app.post("/ask", (_, res) => {
    =============================== */
 
 app.get("/", (_, res) => {
-  res.send("PMC CENTRE AI backend running (Text Extraction v1)");
+  res.send("PMC CENTRE AI backend running (Embeddings v1)");
 });
 
 const PORT = process.env.PORT || 3000;
