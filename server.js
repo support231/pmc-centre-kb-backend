@@ -163,6 +163,13 @@ Rules:
 - Use plain text only.
 `;
 
+const GENERAL_SYSTEM_INSTRUCTION = `
+Answer clearly and factually.
+Use plain paragraphs only.
+Do not use bullets, numbering, markdown, or special formatting.
+If verification is not possible, say so clearly.
+`;
+
 /* ===============================
    ASK ENDPOINT
    =============================== */
@@ -262,10 +269,8 @@ app.post("/ask", async (req, res) => {
     else {
       const current = isCurrentGeneral(question);
       let context = "";
-      let webUsed = false;
 
       if (current) {
-        webUsed = true;
         const sources = [
           "https://www.britannica.com",
           "https://www.reuters.com",
@@ -282,11 +287,7 @@ app.post("/ask", async (req, res) => {
       const r = await openai.responses.create({
         model: "gpt-5.2",
         input: [
-          {
-            role: "system",
-            content:
-              "Answer clearly and factually. If verification is not possible, say so."
-          },
+          { role: "system", content: GENERAL_SYSTEM_INSTRUCTION },
           {
             role: "user",
             content:
@@ -300,7 +301,7 @@ app.post("/ask", async (req, res) => {
 
       answer = r.output_text || "";
 
-      if (!answer || answer.trim().length < 20) {
+      if (!answer || answer.trim().length < 30) {
         answer =
           "This question may require clarification or reliable external verification. " +
           "Please rephrase or provide more specific details.";
@@ -308,7 +309,6 @@ app.post("/ask", async (req, res) => {
 
       console.log("[GENERAL]");
       console.log("Current topic:", current);
-      console.log("Web used:", webUsed);
     }
 
     res.json({ answer });
