@@ -104,10 +104,10 @@ async function retrieveKB(question) {
 }
 
 /* ===============================
-   SIMPLE SITE FETCH
+   WEB FETCH (CLEAN + LIMITED)
    =============================== */
 
-async function fetchText(url, limit = 4000) {
+async function fetchCleanText(url, limit = 2000) {
   try {
     const r = await fetch(url);
     const html = await r.text();
@@ -123,49 +123,30 @@ async function fetchText(url, limit = 4000) {
 }
 
 /* ===============================
-   FACTUAL-CURRENT DETECTION
+   DETECTION
    =============================== */
+
+function extractYear(q) {
+  const m = q.match(/\b20(2[3-9]|3[0-5])\b/);
+  return m ? m[0] : null;
+}
 
 function isFactualCurrentPMC(q) {
   const t = q.toLowerCase();
-
-  const yearPattern = /\b20(2[3-9]|3[0-5])\b/;
-  const timeWords = [
-    "recent", "latest", "new", "currently", "this year",
-    "last year", "recently"
+  const triggers = [
+    "recent", "latest", "announce", "announced", "launch",
+    "introduced", "press release", "news", "update"
   ];
-  const eventWords = [
-    "announce", "announced", "launch", "launched",
-    "introduce", "introduced", "release", "released",
-    "expand", "expansion", "acquire", "acquisition",
-    "investment", "press release", "news", "update"
-  ];
-
-  const oemsAndIndustry = [
-    "albany", "asten", "astenjohnson", "valmet", "voith",
-    "andritz", "kufferath",
-    "international paper", "sappi", "upm",
-    "itc", "jk paper", "tnpl", "ballarpur",
-    "paperage", "pulp & paper international",
-    "tappi", "papermart", "india paper news"
-  ];
-
-  if (yearPattern.test(t)) return true;
-  if (timeWords.some(w => t.includes(w))) return true;
-  if (eventWords.some(w => t.includes(w))) return true;
-  if (oemsAndIndustry.some(w => t.includes(w))) {
-    if (eventWords.some(e => t.includes(e))) return true;
-  }
-
-  return false;
+  if (extractYear(q)) return true;
+  return triggers.some(w => t.includes(w));
 }
 
-function isCurrentTopicGeneral(q) {
+function isCurrentGeneral(q) {
   const t = q.toLowerCase();
   return (
     t.includes("today") ||
-    t.includes("latest") ||
     t.includes("current") ||
+    t.includes("latest") ||
     t.includes("now")
   );
 }
@@ -178,11 +159,8 @@ const PMC_SYSTEM_INSTRUCTION = `
 You are PMC CENTRE AI. Answer professionally and practically for paper machine clothing experts.
 Rules:
 - Give a complete answer within the allowed length.
-- Never start a point that you cannot finish.
-- Keep each point concise (2–3 sentences max).
-- If the topic is broad, summarize instead of expanding.
-- Prioritize finishing the answer over adding more points.
-- Use plain text only. Do not use markdown, bullets, or asterisks.
+- Keep answers factual and verifiable.
+- Use plain text only.
 `;
 
 /* ===============================
@@ -194,45 +172,42 @@ app.post("/ask", async (req, res) => {
     const { question, mode } = req.body;
     let answer = "";
 
-    let usedKB = false;
-    let usedWebVerification = false;
-    let pmcFactualCurrent = false;
+    let pmcFactual = false;
     let kbBlocked = false;
+    let usedKB = false;
+    let usedWeb = false;
 
     /* ---------- PMC MODE ---------- */
     if (mode === "PMC") {
-      pmcFactualCurrent = isFactualCurrentPMC(question);
-
+      pmcFactual = isFactualCurrentPMC(question);
+      const year = extractYear(question);
       let context = "";
 
-      if (pmcFactualCurrent) {
+      if (pmcFactual) {
         kbBlocked = true;
 
         const sources = [
-          "https://www.valmet.com/pulp-paper",
-          "https://www.andritz.com/pulp-paper",
-          "https://www.voith.com",
-          "https://www.astenjohnson.com",
-          "https://www.albanyinternational.com",
-          "https://www.kufferath.com",
-          "https://www.tappi.org",
-          "https://www.paperage.com",
-          "https://www.papermart.in"
+          "https://www.valmet.com/media/news/",
+          "https://www.andritz.com/newsroom-en",
+          "https://www.voith.com/news",
+          "https://www.astenjohnson.com/news",
+          "https://www.albanyinternational.com/news",
+          "https://www.tappi.org/news"
         ];
 
         for (const url of sources) {
-          const txt = await fetchText(url);
-          if (txt) {
+          const txt = await fetchCleanText(url);
+          if (txt && (!year || txt.includes(year))) {
             context += "\n" + txt;
-            usedWebVerification = true;
+            usedWeb = true;
           }
+          if (context.length > 3000) break;
         }
 
-        if (context.length < 600) {
+        if (context.length < 500) {
           answer =
-            "This question concerns recent or time-bound factual information. " +
-            "Verification from official OEM announcements or industry publications is required, " +
-            "and it cannot be reliably answered from the PMC knowledge base alone.";
+            "This question relates to recent or time-bound factual information. " +
+            "No verified announcement matching the specified timeframe was found from official sources.";
         } else {
           const r = await openai.responses.create({
             model: "gpt-5.2",
@@ -240,11 +215,10 @@ app.post("/ask", async (req, res) => {
               { role: "system", content: PMC_SYSTEM_INSTRUCTION },
               {
                 role: "user",
-                content:
-                  "Verified context:\n" + context + "\n\nQuestion:\n" + question
+                content: "Verified context:\n" + context + "\n\nQuestion:\n" + question
               }
             ],
-            max_output_tokens: 500
+            max_output_tokens: 450
           });
           answer = r.output_text || "";
         }
@@ -252,10 +226,10 @@ app.post("/ask", async (req, res) => {
         const kb = await retrieveKB(question);
         if (kb.length > 0) {
           usedKB = true;
-          context += kb.map(k => k.text).join("\n\n");
+          context = kb.map(k => k.text).join("\n\n");
         }
 
-        if (context.trim().length < 500) {
+        if (context.length < 400) {
           answer =
             "This question requires case-specific technical review. " +
             "Please contact support@pmccentre.com for expert assistance.";
@@ -266,8 +240,7 @@ app.post("/ask", async (req, res) => {
               { role: "system", content: PMC_SYSTEM_INSTRUCTION },
               {
                 role: "user",
-                content:
-                  "Context:\n" + context + "\n\nQuestion:\n" + question
+                content: "Context:\n" + context + "\n\nQuestion:\n" + question
               }
             ],
             max_output_tokens: 600
@@ -276,16 +249,34 @@ app.post("/ask", async (req, res) => {
         }
       }
 
-      console.log("[PMC PIPELINE]");
-      console.log("PMC factual-current detected:", pmcFactualCurrent);
+      console.log("[PMC]");
+      console.log("Factual-current:", pmcFactual);
       console.log("KB blocked:", kbBlocked);
       console.log("KB used:", usedKB);
-      console.log("Web verification used:", usedWebVerification);
+      console.log("Web used:", usedWeb);
     }
 
     /* ---------- GENERAL MODE ---------- */
     else {
-      const detectedCurrent = isCurrentTopicGeneral(question);
+      const current = isCurrentGeneral(question);
+      let context = "";
+
+      if (current) {
+        const sources = [
+          "https://www.britannica.com",
+          "https://www.reuters.com",
+          "https://www.bbc.com/news"
+        ];
+
+        for (const url of sources) {
+          const txt = await fetchCleanText(url, 1500);
+          if (txt) {
+            context += "\n" + txt;
+            usedWeb = true;
+          }
+          if (context.length > 2500) break;
+        }
+      }
 
       const r = await openai.responses.create({
         model: "gpt-5.2",
@@ -293,14 +284,13 @@ app.post("/ask", async (req, res) => {
           {
             role: "system",
             content:
-              "Answer clearly and concisely. Use plain text only. Do not use markdown, bullets, or asterisks."
+              "Answer clearly and factually. If verification is not possible, say so."
           },
           {
             role: "user",
             content:
-              detectedCurrent
-                ? question +
-                  "\n\nIf real-time or current factual data is required and cannot be verified, state that clearly and suggest reliable sources."
+              context
+                ? "Context:\n" + context + "\n\nQuestion:\n" + question
                 : question
           }
         ],
@@ -309,8 +299,9 @@ app.post("/ask", async (req, res) => {
 
       answer = r.output_text || "";
 
-      console.log("[GENERAL PIPELINE]");
-      console.log("Current topic detected:", detectedCurrent);
+      console.log("[GENERAL]");
+      console.log("Current topic:", current);
+      console.log("Web used:", usedWeb);
     }
 
     res.json({ answer });
