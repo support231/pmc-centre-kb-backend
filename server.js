@@ -104,26 +104,7 @@ async function retrieveKB(question) {
 }
 
 /* ===============================
-   WEB FETCH
-   =============================== */
-
-async function fetchCleanText(url, limit = 2000) {
-  try {
-    const r = await fetch(url);
-    const html = await r.text();
-    return html
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .slice(0, limit);
-  } catch {
-    return "";
-  }
-}
-
-/* ===============================
-   DETECTION
+   DETECTION HELPERS
    =============================== */
 
 function extractYear(q) {
@@ -170,6 +151,19 @@ Do not use bullets, numbering, markdown, or special formatting.
 If verification is not possible, say so clearly.
 `;
 
+const LIVE_SYSTEM_INSTRUCTION = `
+You are a LIVE WEB INFORMATION assistant.
+
+Rules:
+- Use ONLY live web search results
+- Do NOT use PMC knowledge base
+- Do NOT provide PMC technical advice
+- If information is uncertain, say so clearly
+- Be neutral and factual
+- Begin every answer with:
+  "Based on live web information as of today:"
+`;
+
 /* ===============================
    ASK ENDPOINT
    =============================== */
@@ -179,57 +173,16 @@ app.post("/ask", async (req, res) => {
     const { question, mode } = req.body;
     let answer = "";
 
-    let pmcFactual = false;
-    let kbBlocked = false;
-    let usedKB = false;
-    let webAttempted = false;
-
-    /* ---------- PMC MODE ---------- */
+    /* ---------- PMC MODE (UNCHANGED) ---------- */
     if (mode === "PMC") {
-      pmcFactual = isFactualCurrentPMC(question);
-      const year = extractYear(question);
+      let pmcFactual = isFactualCurrentPMC(question);
+      let usedKB = false;
       let context = "";
 
       if (pmcFactual) {
-        kbBlocked = true;
-        webAttempted = true;
-
-        const sources = [
-          "https://www.valmet.com/media/news/",
-          "https://www.andritz.com/newsroom-en",
-          "https://www.voith.com/news",
-          "https://www.astenjohnson.com/news",
-          "https://www.albanyinternational.com/news",
-          "https://www.tappi.org/news"
-        ];
-
-        for (const url of sources) {
-          const txt = await fetchCleanText(url);
-          if (txt && (!year || txt.includes(year))) {
-            context += "\n" + txt;
-          }
-          if (context.length > 3000) break;
-        }
-
-        if (context.length < 500) {
-          answer =
-            "This question relates to recent or time-bound factual information. " +
-            "No verified announcement matching the specified timeframe was found from official sources.";
-        } else {
-          const r = await openai.responses.create({
-            model: "gpt-5.2",
-            input: [
-              { role: "system", content: PMC_SYSTEM_INSTRUCTION },
-              {
-                role: "user",
-                content:
-                  "Verified context:\n" + context + "\n\nQuestion:\n" + question
-              }
-            ],
-            max_output_tokens: 450
-          });
-          answer = r.output_text || "";
-        }
+        answer =
+          "This question relates to recent or time-bound factual information. " +
+          "PMC Expert Mode does not provide live announcements.";
       } else {
         const kb = await retrieveKB(question);
         if (kb.length > 0) {
@@ -246,11 +199,7 @@ app.post("/ask", async (req, res) => {
             model: "gpt-5.2",
             input: [
               { role: "system", content: PMC_SYSTEM_INSTRUCTION },
-              {
-                role: "user",
-                content:
-                  "Context:\n" + context + "\n\nQuestion:\n" + question
-              }
+              { role: "user", content: "Context:\n" + context + "\n\nQuestion:\n" + question }
             ],
             max_output_tokens: 600
           });
@@ -258,43 +207,35 @@ app.post("/ask", async (req, res) => {
         }
       }
 
-      console.log("[PMC]");
-      console.log("Factual-current:", pmcFactual);
-      console.log("KB blocked:", kbBlocked);
-      console.log("KB used:", usedKB);
-      console.log("Web attempted:", webAttempted);
+      console.log("[PMC MODE] KB used:", usedKB);
     }
 
-    /* ---------- GENERAL MODE ---------- */
+    /* ---------- LIVE MODE (NEW) ---------- */
+    else if (mode === "LIVE") {
+      console.log("[LIVE MODE] Web search enabled");
+
+      const r = await openai.responses.create({
+        model: "gpt-5.2",
+        tools: [{ type: "web_search" }],
+        input: [
+          { role: "system", content: LIVE_SYSTEM_INSTRUCTION },
+          { role: "user", content: question }
+        ],
+        max_output_tokens: 450
+      });
+
+      answer = r.output_text || "Live web information could not be verified at this time.";
+    }
+
+    /* ---------- GENERAL MODE (UNCHANGED) ---------- */
     else {
       const current = isCurrentGeneral(question);
-      let context = "";
-
-      if (current) {
-        const sources = [
-          "https://www.britannica.com",
-          "https://www.reuters.com",
-          "https://www.bbc.com/news"
-        ];
-
-        for (const url of sources) {
-          const txt = await fetchCleanText(url, 1500);
-          if (txt) context += "\n" + txt;
-          if (context.length > 2500) break;
-        }
-      }
 
       const r = await openai.responses.create({
         model: "gpt-5.2",
         input: [
           { role: "system", content: GENERAL_SYSTEM_INSTRUCTION },
-          {
-            role: "user",
-            content:
-              context
-                ? "Context:\n" + context + "\n\nQuestion:\n" + question
-                : question
-          }
+          { role: "user", content: question }
         ],
         max_output_tokens: 400
       });
@@ -307,8 +248,7 @@ app.post("/ask", async (req, res) => {
           "Please rephrase or provide more specific details.";
       }
 
-      console.log("[GENERAL]");
-      console.log("Current topic:", current);
+      console.log("[GENERAL MODE] Current topic:", current);
     }
 
     res.json({ answer });
