@@ -165,8 +165,14 @@ app.post("/ask", async (req, res) => {
             {
               role: "system",
               content:
-                "You are PMC CENTRE AI. Answer professionally and practically. " +
-                "Use plain text only. Do not use markdown, bullets, or asterisks."
+                "You are PMC CENTRE AI. Answer professionally and practically for paper machine clothing experts.
+Rules:
+- Give a complete answer within the allowed length.
+- Never start a point that you cannot finish.
+- Keep each point concise (2–3 sentences max).
+- If the topic is broad, summarize instead of expanding.
+- Prioritize finishing the answer over adding more points.
+- Use plain text only. Do not use markdown, bullets, or asterisks."
             },
             {
               role: "user",
