@@ -210,22 +210,40 @@ app.post("/ask", async (req, res) => {
       console.log("[PMC MODE] KB used:", usedKB);
     }
 
-    /* ---------- LIVE MODE (NEW) ---------- */
-    else if (mode === "LIVE") {
-      console.log("[LIVE MODE] Web search enabled");
+   
+    /* ---------- LIVE MODE (SAFE FALLBACK) ---------- */
+else if (mode === "LIVE") {
+  console.log("[LIVE MODE] Web search enabled");
 
-      const r = await openai.responses.create({
-        model: "gpt-5.2",
-        tools: [{ type: "web_search" }],
-        input: [
-          { role: "system", content: LIVE_SYSTEM_INSTRUCTION },
-          { role: "user", content: question }
-        ],
-        max_output_tokens: 450
-      });
+  try {
+    const r = await openai.responses.create({
+      model: "gpt-5.2",
+      tools: [{ type: "web_search" }],
+      input: [
+        { role: "system", content: LIVE_SYSTEM_INSTRUCTION },
+        { role: "user", content: question }
+      ],
+      max_output_tokens: 450
+    });
 
-      answer = r.output_text || "Live web information could not be verified at this time.";
+    answer = r.output_text || "";
+
+    if (!answer || answer.trim().length < 40) {
+      answer =
+        "Based on live web information as of today: " +
+        "Live sources did not return sufficient verified data for this query. " +
+        "Please try again shortly or contact support@pmccentre.com.";
     }
+
+  } catch (liveErr) {
+    console.error("[LIVE MODE ERROR]", liveErr);
+
+    answer =
+      "Based on live web information as of today: " +
+      "Live web sources could not be reliably reached at this moment. " +
+      "Please retry after some time or contact support@pmccentre.com.";
+  }
+}
 
     /* ---------- GENERAL MODE (UNCHANGED) ---------- */
     else {
