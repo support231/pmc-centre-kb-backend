@@ -9,7 +9,7 @@ const app = express();
 app.use(express.json());
 
 /* ===============================
-   OPENAI CLIENT (EMBEDDINGS ONLY)
+   OPENAI CLIENT
    =============================== */
 
 const openai = new OpenAI({
@@ -25,6 +25,7 @@ const ADANUR_PREFIX = "PaperMachineClothingAdanur_";
 
 const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 200;
+const TOP_K = 5;
 
 /* ===============================
    FILE SCAN & CLASSIFICATION
@@ -96,13 +97,24 @@ function chunkText(text) {
 }
 
 /* ===============================
+   VECTOR MATH
+   =============================== */
+
+function cosineSimilarity(a, b) {
+  const dot = a.reduce((sum, val, i) => sum + val * b[i], 0);
+  const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
+  const magB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
+  return dot / (magA * magB);
+}
+
+/* ===============================
    VECTOR STORE
    =============================== */
 
 let kbChunks = [];
 
 /* ===============================
-   PIPELINE: LOAD → EMBED
+   LOAD → EMBED
    =============================== */
 
 console.log("🔹 EMBEDDINGS PIPELINE START");
@@ -142,14 +154,109 @@ console.log("🔹 EMBEDDINGS PIPELINE START");
 })();
 
 /* ===============================
-   SAFE PLACEHOLDER ENDPOINT
+   INTENT DETECTION
    =============================== */
 
-app.post("/ask", (_, res) => {
-  res.json({
-    status: "Retrieval engine ready",
-    chunks_loaded: kbChunks.length
+async function detectIntent(question) {
+  const r = await openai.responses.create({
+    model: "gpt-5.2",
+    input: [
+      {
+        role: "system",
+        content:
+          "Classify the user question. Reply with ONE WORD only: PMC or GENERAL."
+      },
+      {
+        role: "user",
+        content: question
+      }
+    ],
+    max_output_tokens: 5
   });
+
+  const text = r.output_text || "";
+  return text.toUpperCase().includes("PMC") ? "PMC" : "GENERAL";
+}
+
+/* ===============================
+   KB RETRIEVAL
+   =============================== */
+
+async function retrieveKB(question) {
+  const qEmb = await openai.embeddings.create({
+    model: "text-embedding-3-large",
+    input: question
+  });
+
+  const qVec = qEmb.data[0].embedding;
+
+  return kbChunks
+    .map(c => ({ ...c, score: cosineSimilarity(qVec, c.embedding) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, TOP_K);
+}
+
+/* ===============================
+   ASK ENDPOINT (FINAL)
+   =============================== */
+
+app.post("/ask", async (req, res) => {
+  try {
+    const question = req.body.question || "";
+
+    if (!question.trim()) {
+      return res.json({ answer: "No question received." });
+    }
+
+    const intent = await detectIntent(question);
+
+    let answer = "";
+
+    if (intent === "PMC") {
+      const matches = await retrieveKB(question);
+
+      const context = matches
+        .map(m => m.text)
+        .join("\n\n");
+
+      const r = await openai.responses.create({
+        model: "gpt-5.2",
+        input: [
+          {
+            role: "system",
+            content:
+              "You are PMC CENTRE AI. Answer professionally and practically. " +
+              "Use plain text only. Do not use markdown, bullets, or asterisks."
+          },
+          {
+            role: "user",
+            content:
+              "Context:\n" + context + "\n\nQuestion:\n" + question
+          }
+        ],
+        max_output_tokens: 600
+      });
+
+      answer = r.output_text || "No answer generated.";
+
+    } else {
+      const r = await openai.responses.create({
+        model: "gpt-5.2",
+        input: question,
+        max_output_tokens: 400
+      });
+
+      answer = r.output_text || "No answer generated.";
+    }
+
+    res.json({ intent, answer });
+
+  } catch (err) {
+    console.error("❌ ASK ERROR:", err);
+    res.status(500).json({
+      answer: "Backend error occurred. Please check Render logs."
+    });
+  }
 });
 
 /* ===============================
@@ -157,7 +264,7 @@ app.post("/ask", (_, res) => {
    =============================== */
 
 app.get("/", (_, res) => {
-  res.send("PMC CENTRE AI backend running (Clean Retrieval Engine)");
+  res.send("PMC CENTRE AI backend running (Answer Generation v1)");
 });
 
 const PORT = process.env.PORT || 3000;
