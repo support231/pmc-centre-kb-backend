@@ -80,6 +80,7 @@ function chunkText(text) {
       });
     }
   }
+  console.log("KB embeddings loaded:", kbChunks.length);
 })();
 
 /* ===============================
@@ -103,7 +104,7 @@ async function retrieveKB(question) {
 }
 
 /* ===============================
-   SIMPLE SITE FETCH (TEXT ONLY)
+   SIMPLE SITE FETCH
    =============================== */
 
 async function fetchText(url, limit = 4000) {
@@ -137,7 +138,6 @@ function isCurrentTopic(q) {
 
 const PMC_SYSTEM_INSTRUCTION = `
 You are PMC CENTRE AI. Answer professionally and practically for paper machine clothing experts.
-
 Rules:
 - Give a complete answer within the allowed length.
 - Never start a point that you cannot finish.
@@ -156,28 +156,58 @@ app.post("/ask", async (req, res) => {
     const { question, mode } = req.body;
     let answer = "";
 
+    /* LOG FLAGS */
+    let usedKB = false;
+    let usedPMCsite = false;
+    let usedPMCblog = false;
+    let usedExternal = [];
+    let usedFallback = false;
+    let detectedCurrent = false;
+
     /* ---------- PMC MODE ---------- */
     if (mode === "PMC") {
       let context = "";
 
       // 2.1 KB
       const kb = await retrieveKB(question);
-      context += kb.map(k => k.text).join("\n\n");
+      if (kb.length > 0) {
+        usedKB = true;
+        context += kb.map(k => k.text).join("\n\n");
+      }
 
       // 2.2 PMC Centre site + blog
       if (context.length < 800) {
-        context += "\n" + await fetchText("https://www.pmccentre.com");
-        context += "\n" + await fetchText("https://www.pmccentre.com/blog");
+        const site = await fetchText("https://www.pmccentre.com");
+        if (site) {
+          usedPMCsite = true;
+          context += "\n" + site;
+        }
+
+        const blog = await fetchText("https://www.pmccentre.com/blog");
+        if (blog) {
+          usedPMCblog = true;
+          context += "\n" + blog;
+        }
       }
 
-      // 2.3 External reputed sites (controlled list)
+      // 2.3 External reputed sites
       if (context.length < 1200) {
-        context += "\n" + await fetchText("https://www.valmet.com/pulp-paper");
-        context += "\n" + await fetchText("https://www.andritz.com/pulp-paper");
+        const valmet = await fetchText("https://www.valmet.com/pulp-paper");
+        if (valmet) {
+          usedExternal.push("Valmet");
+          context += "\n" + valmet;
+        }
+
+        const andritz = await fetchText("https://www.andritz.com/pulp-paper");
+        if (andritz) {
+          usedExternal.push("Andritz");
+          context += "\n" + andritz;
+        }
       }
 
       // 2.4 Fallback
       if (context.trim().length < 500) {
+        usedFallback = true;
         answer =
           "This question requires case-specific technical review. " +
           "Please contact support@pmccentre.com for expert assistance.";
@@ -196,17 +226,18 @@ app.post("/ask", async (req, res) => {
         });
         answer = r.output_text || "";
       }
+
+      console.log("[PMC PIPELINE]");
+      console.log("KB used:", usedKB);
+      console.log("PMC site used:", usedPMCsite);
+      console.log("PMC blog used:", usedPMCblog);
+      console.log("External reputed sites:", usedExternal.join(", ") || "NONE");
+      console.log("Fallback used:", usedFallback);
     }
 
     /* ---------- GENERAL MODE ---------- */
     else {
-      let userPrompt = question;
-
-      // 3.2 current/latest guidance only
-      if (isCurrentTopic(question)) {
-        userPrompt +=
-          "\n\nIf live or real-time data is required and unavailable, state that clearly and suggest reliable sources.";
-      }
+      detectedCurrent = isCurrentTopic(question);
 
       const r = await openai.responses.create({
         model: "gpt-5.2",
@@ -216,12 +247,24 @@ app.post("/ask", async (req, res) => {
             content:
               "Answer clearly and concisely. Use plain text only. Do not use markdown, bullets, or asterisks."
           },
-          { role: "user", content: userPrompt }
+          {
+            role: "user",
+            content:
+              detectedCurrent
+                ? question +
+                  "\n\nIf live or real-time data is required and unavailable, state that clearly and suggest reliable sources."
+                : question
+          }
         ],
         max_output_tokens: 400
       });
 
       answer = r.output_text || "";
+
+      console.log("[GENERAL PIPELINE]");
+      console.log("Internal knowledge used: YES");
+      console.log("Current topic detected:", detectedCurrent);
+      console.log("Live data guidance given:", detectedCurrent);
     }
 
     res.json({ answer });
