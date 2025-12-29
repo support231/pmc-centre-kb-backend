@@ -171,7 +171,7 @@ async function detectIntent(question) {
         content: question
       }
     ],
-    max_output_tokens: 5
+    max_output_tokens: 16
   });
 
   const text = r.output_text || "";
