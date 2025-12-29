@@ -123,10 +123,44 @@ async function fetchText(url, limit = 4000) {
 }
 
 /* ===============================
-   HELPERS
+   FACTUAL-CURRENT DETECTION
    =============================== */
 
-function isCurrentTopic(q) {
+function isFactualCurrentPMC(q) {
+  const t = q.toLowerCase();
+
+  const yearPattern = /\b20(2[3-9]|3[0-5])\b/;
+  const timeWords = [
+    "recent", "latest", "new", "currently", "this year",
+    "last year", "recently"
+  ];
+  const eventWords = [
+    "announce", "announced", "launch", "launched",
+    "introduce", "introduced", "release", "released",
+    "expand", "expansion", "acquire", "acquisition",
+    "investment", "press release", "news", "update"
+  ];
+
+  const oemsAndIndustry = [
+    "albany", "asten", "astenjohnson", "valmet", "voith",
+    "andritz", "kufferath",
+    "international paper", "sappi", "upm",
+    "itc", "jk paper", "tnpl", "ballarpur",
+    "paperage", "pulp & paper international",
+    "tappi", "papermart", "india paper news"
+  ];
+
+  if (yearPattern.test(t)) return true;
+  if (timeWords.some(w => t.includes(w))) return true;
+  if (eventWords.some(w => t.includes(w))) return true;
+  if (oemsAndIndustry.some(w => t.includes(w))) {
+    if (eventWords.some(e => t.includes(e))) return true;
+  }
+
+  return false;
+}
+
+function isCurrentTopicGeneral(q) {
   const t = q.toLowerCase();
   return (
     t.includes("today") ||
@@ -135,6 +169,10 @@ function isCurrentTopic(q) {
     t.includes("now")
   );
 }
+
+/* ===============================
+   SYSTEM INSTRUCTIONS
+   =============================== */
 
 const PMC_SYSTEM_INSTRUCTION = `
 You are PMC CENTRE AI. Answer professionally and practically for paper machine clothing experts.
@@ -156,88 +194,98 @@ app.post("/ask", async (req, res) => {
     const { question, mode } = req.body;
     let answer = "";
 
-    /* LOG FLAGS */
     let usedKB = false;
-    let usedPMCsite = false;
-    let usedPMCblog = false;
-    let usedExternal = [];
-    let usedFallback = false;
-    let detectedCurrent = false;
+    let usedWebVerification = false;
+    let pmcFactualCurrent = false;
+    let kbBlocked = false;
 
     /* ---------- PMC MODE ---------- */
     if (mode === "PMC") {
+      pmcFactualCurrent = isFactualCurrentPMC(question);
+
       let context = "";
 
-      // 2.1 KB
-      const kb = await retrieveKB(question);
-      if (kb.length > 0) {
-        usedKB = true;
-        context += kb.map(k => k.text).join("\n\n");
-      }
+      if (pmcFactualCurrent) {
+        kbBlocked = true;
 
-      // 2.2 PMC Centre site + blog
-      if (context.length < 800) {
-        const site = await fetchText("https://www.pmccentre.com");
-        if (site) {
-          usedPMCsite = true;
-          context += "\n" + site;
+        const sources = [
+          "https://www.valmet.com/pulp-paper",
+          "https://www.andritz.com/pulp-paper",
+          "https://www.voith.com",
+          "https://www.astenjohnson.com",
+          "https://www.albanyinternational.com",
+          "https://www.kufferath.com",
+          "https://www.tappi.org",
+          "https://www.paperage.com",
+          "https://www.papermart.in"
+        ];
+
+        for (const url of sources) {
+          const txt = await fetchText(url);
+          if (txt) {
+            context += "\n" + txt;
+            usedWebVerification = true;
+          }
         }
 
-        const blog = await fetchText("https://www.pmccentre.com/blog");
-        if (blog) {
-          usedPMCblog = true;
-          context += "\n" + blog;
+        if (context.length < 600) {
+          answer =
+            "This question concerns recent or time-bound factual information. " +
+            "Verification from official OEM announcements or industry publications is required, " +
+            "and it cannot be reliably answered from the PMC knowledge base alone.";
+        } else {
+          const r = await openai.responses.create({
+            model: "gpt-5.2",
+            input: [
+              { role: "system", content: PMC_SYSTEM_INSTRUCTION },
+              {
+                role: "user",
+                content:
+                  "Verified context:\n" + context + "\n\nQuestion:\n" + question
+              }
+            ],
+            max_output_tokens: 500
+          });
+          answer = r.output_text || "";
         }
-      }
-
-      // 2.3 External reputed sites
-      if (context.length < 1200) {
-        const valmet = await fetchText("https://www.valmet.com/pulp-paper");
-        if (valmet) {
-          usedExternal.push("Valmet");
-          context += "\n" + valmet;
-        }
-
-        const andritz = await fetchText("https://www.andritz.com/pulp-paper");
-        if (andritz) {
-          usedExternal.push("Andritz");
-          context += "\n" + andritz;
-        }
-      }
-
-      // 2.4 Fallback
-      if (context.trim().length < 500) {
-        usedFallback = true;
-        answer =
-          "This question requires case-specific technical review. " +
-          "Please contact support@pmccentre.com for expert assistance.";
       } else {
-        const r = await openai.responses.create({
-          model: "gpt-5.2",
-          input: [
-            { role: "system", content: PMC_SYSTEM_INSTRUCTION },
-            {
-              role: "user",
-              content:
-                "Context:\n" + context + "\n\nQuestion:\n" + question
-            }
-          ],
-          max_output_tokens: 600
-        });
-        answer = r.output_text || "";
+        const kb = await retrieveKB(question);
+        if (kb.length > 0) {
+          usedKB = true;
+          context += kb.map(k => k.text).join("\n\n");
+        }
+
+        if (context.trim().length < 500) {
+          answer =
+            "This question requires case-specific technical review. " +
+            "Please contact support@pmccentre.com for expert assistance.";
+        } else {
+          const r = await openai.responses.create({
+            model: "gpt-5.2",
+            input: [
+              { role: "system", content: PMC_SYSTEM_INSTRUCTION },
+              {
+                role: "user",
+                content:
+                  "Context:\n" + context + "\n\nQuestion:\n" + question
+              }
+            ],
+            max_output_tokens: 600
+          });
+          answer = r.output_text || "";
+        }
       }
 
       console.log("[PMC PIPELINE]");
+      console.log("PMC factual-current detected:", pmcFactualCurrent);
+      console.log("KB blocked:", kbBlocked);
       console.log("KB used:", usedKB);
-      console.log("PMC site used:", usedPMCsite);
-      console.log("PMC blog used:", usedPMCblog);
-      console.log("External reputed sites:", usedExternal.join(", ") || "NONE");
-      console.log("Fallback used:", usedFallback);
+      console.log("Web verification used:", usedWebVerification);
     }
 
     /* ---------- GENERAL MODE ---------- */
     else {
-      detectedCurrent = isCurrentTopic(question);
+      const detectedCurrent = isCurrentTopicGeneral(question);
 
       const r = await openai.responses.create({
         model: "gpt-5.2",
@@ -252,7 +300,7 @@ app.post("/ask", async (req, res) => {
             content:
               detectedCurrent
                 ? question +
-                  "\n\nIf live or real-time data is required and unavailable, state that clearly and suggest reliable sources."
+                  "\n\nIf real-time or current factual data is required and cannot be verified, state that clearly and suggest reliable sources."
                 : question
           }
         ],
@@ -262,9 +310,7 @@ app.post("/ask", async (req, res) => {
       answer = r.output_text || "";
 
       console.log("[GENERAL PIPELINE]");
-      console.log("Internal knowledge used: YES");
       console.log("Current topic detected:", detectedCurrent);
-      console.log("Live data guidance given:", detectedCurrent);
     }
 
     res.json({ answer });
