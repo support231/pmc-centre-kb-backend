@@ -104,7 +104,7 @@ async function retrieveKB(question) {
 }
 
 /* ===============================
-   WEB FETCH (CLEAN + LIMITED)
+   WEB FETCH
    =============================== */
 
 async function fetchCleanText(url, limit = 2000) {
@@ -175,7 +175,7 @@ app.post("/ask", async (req, res) => {
     let pmcFactual = false;
     let kbBlocked = false;
     let usedKB = false;
-    let usedWeb = false;
+    let webAttempted = false;
 
     /* ---------- PMC MODE ---------- */
     if (mode === "PMC") {
@@ -185,6 +185,7 @@ app.post("/ask", async (req, res) => {
 
       if (pmcFactual) {
         kbBlocked = true;
+        webAttempted = true;
 
         const sources = [
           "https://www.valmet.com/media/news/",
@@ -199,7 +200,6 @@ app.post("/ask", async (req, res) => {
           const txt = await fetchCleanText(url);
           if (txt && (!year || txt.includes(year))) {
             context += "\n" + txt;
-            usedWeb = true;
           }
           if (context.length > 3000) break;
         }
@@ -215,7 +215,8 @@ app.post("/ask", async (req, res) => {
               { role: "system", content: PMC_SYSTEM_INSTRUCTION },
               {
                 role: "user",
-                content: "Verified context:\n" + context + "\n\nQuestion:\n" + question
+                content:
+                  "Verified context:\n" + context + "\n\nQuestion:\n" + question
               }
             ],
             max_output_tokens: 450
@@ -240,7 +241,8 @@ app.post("/ask", async (req, res) => {
               { role: "system", content: PMC_SYSTEM_INSTRUCTION },
               {
                 role: "user",
-                content: "Context:\n" + context + "\n\nQuestion:\n" + question
+                content:
+                  "Context:\n" + context + "\n\nQuestion:\n" + question
               }
             ],
             max_output_tokens: 600
@@ -253,15 +255,17 @@ app.post("/ask", async (req, res) => {
       console.log("Factual-current:", pmcFactual);
       console.log("KB blocked:", kbBlocked);
       console.log("KB used:", usedKB);
-      console.log("Web used:", usedWeb);
+      console.log("Web attempted:", webAttempted);
     }
 
     /* ---------- GENERAL MODE ---------- */
     else {
       const current = isCurrentGeneral(question);
       let context = "";
+      let webUsed = false;
 
       if (current) {
+        webUsed = true;
         const sources = [
           "https://www.britannica.com",
           "https://www.reuters.com",
@@ -270,10 +274,7 @@ app.post("/ask", async (req, res) => {
 
         for (const url of sources) {
           const txt = await fetchCleanText(url, 1500);
-          if (txt) {
-            context += "\n" + txt;
-            usedWeb = true;
-          }
+          if (txt) context += "\n" + txt;
           if (context.length > 2500) break;
         }
       }
@@ -299,9 +300,15 @@ app.post("/ask", async (req, res) => {
 
       answer = r.output_text || "";
 
+      if (!answer || answer.trim().length < 20) {
+        answer =
+          "This question may require clarification or reliable external verification. " +
+          "Please rephrase or provide more specific details.";
+      }
+
       console.log("[GENERAL]");
       console.log("Current topic:", current);
-      console.log("Web used:", usedWeb);
+      console.log("Web used:", webUsed);
     }
 
     res.json({ answer });
