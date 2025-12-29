@@ -205,19 +205,19 @@ app.post("/ask", async (req, res) => {
     const question = req.body.question || "";
 
     if (!question.trim()) {
-      return res.json({ answer: "No question received." });
+      return res.json({
+        intent: "UNKNOWN",
+        answer: "No question received."
+      });
     }
 
     const intent = await detectIntent(question);
-
     let answer = "";
 
     if (intent === "PMC") {
       const matches = await retrieveKB(question);
 
-      const context = matches
-        .map(m => m.text)
-        .join("\n\n");
+      const context = matches.map(m => m.text).join("\n\n");
 
       const r = await openai.responses.create({
         model: "gpt-5.2",
@@ -249,11 +249,12 @@ app.post("/ask", async (req, res) => {
       answer = r.output_text || "No answer generated.";
     }
 
-    res.json({ intent, answer });
+    return res.json({ intent, answer });
 
   } catch (err) {
     console.error("❌ ASK ERROR:", err);
-    res.status(500).json({
+    return res.status(500).json({
+      intent: "ERROR",
       answer: "Backend error occurred. Please check Render logs."
     });
   }
