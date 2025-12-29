@@ -7,11 +7,6 @@ import pdfParse from "pdf-parse";
 import OpenAI from "openai";
 
 const app = express();
-
-/* ===============================
-   CORS (REQUIRED FOR BROWSER CALLS)
-   =============================== */
-
 app.use(cors());
 app.use(express.json());
 
@@ -104,17 +99,6 @@ function chunkText(text) {
 }
 
 /* ===============================
-   VECTOR MATH
-   =============================== */
-
-function cosineSimilarity(a, b) {
-  const dot = a.reduce((sum, val, i) => sum + val * b[i], 0);
-  const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
-  const magB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
-  return dot / (magA * magB);
-}
-
-/* ===============================
    VECTOR STORE
    =============================== */
 
@@ -124,68 +108,42 @@ let kbChunks = [];
    LOAD → EMBED
    =============================== */
 
-console.log("🔹 EMBEDDINGS PIPELINE START");
-
 (async () => {
-  try {
-    const files = scanKB(KB_ROOT).map(classifyFile);
+  const files = scanKB(KB_ROOT).map(classifyFile);
 
-    for (const file of files) {
-      const text = await extractText(file);
-      const chunks = chunkText(text);
+  for (const file of files) {
+    const text = await extractText(file);
+    const chunks = chunkText(text);
 
-      for (const chunk of chunks) {
-        const emb = await openai.embeddings.create({
-          model: "text-embedding-3-large",
-          input: chunk
-        });
+    for (const chunk of chunks) {
+      const emb = await openai.embeddings.create({
+        model: "text-embedding-3-large",
+        input: chunk
+      });
 
-        kbChunks.push({
-          embedding: emb.data[0].embedding,
-          text: chunk,
-          filename: file.filename,
-          kb_type: file.kb_type,
-          section: file.section
-        });
-      }
-
-      console.log(`📄 ${file.filename} → ${chunks.length} chunks embedded`);
+      kbChunks.push({
+        embedding: emb.data[0].embedding,
+        text: chunk
+      });
     }
-
-    console.log("✅ EMBEDDINGS READY");
-    console.log("📚 TOTAL CHUNKS:", kbChunks.length);
-
-  } catch (err) {
-    console.error("❌ EMBEDDING PIPELINE ERROR:", err);
   }
 })();
 
 /* ===============================
-   INTENT DETECTION (AI-ONLY)
+   INTENT DETECTION (UNCHANGED)
    =============================== */
 
 async function detectIntent(question) {
   const r = await openai.responses.create({
     model: "gpt-5.2",
     input: [
-      {
-        role: "system",
-        content:
-          "Classify the user question. Reply with ONE WORD only: PMC or GENERAL."
-      },
-      {
-        role: "user",
-        content: question
-      }
+      { role: "system", content: "Classify the user question. Reply with ONE WORD only: PMC or GENERAL." },
+      { role: "user", content: question }
     ],
     max_output_tokens: 16
   });
 
-  const text =
-    r.output_text ||
-    r.output?.[0]?.content?.[0]?.text ||
-    "";
-
+  const text = r.output_text || r.output?.[0]?.content?.[0]?.text || "";
   return text.toUpperCase().includes("PMC") ? "PMC" : "GENERAL";
 }
 
@@ -202,9 +160,44 @@ async function retrieveKB(question) {
   const qVec = qEmb.data[0].embedding;
 
   return kbChunks
-    .map(c => ({ ...c, score: cosineSimilarity(qVec, c.embedding) }))
+    .map(c => ({
+      text: c.text,
+      score: c.embedding.reduce((s, v, i) => s + v * qVec[i], 0)
+    }))
     .sort((a, b) => b.score - a.score)
     .slice(0, TOP_K);
+}
+
+/* ===============================
+   STEP 2.2 – PMC CENTRE SITE FETCH
+   =============================== */
+
+async function fetchPmcCentreContent() {
+  const urls = [
+    "https://www.pmccentre.com",
+    "https://www.pmccentre.com/blog"
+  ];
+
+  let combinedText = "";
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url);
+      const html = await res.text();
+
+      const textOnly = html
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ");
+
+      combinedText += "\n" + textOnly;
+    } catch (e) {
+      console.error("PMC site fetch failed:", url);
+    }
+  }
+
+  return combinedText.slice(0, 6000);
 }
 
 /* ===============================
@@ -214,20 +207,18 @@ async function retrieveKB(question) {
 app.post("/ask", async (req, res) => {
   try {
     const question = req.body.question || "";
-
-    if (!question.trim()) {
-      return res.json({
-        intent: "UNKNOWN",
-        answer: "No question received."
-      });
-    }
-
     const intent = await detectIntent(question);
+
     let answer = "";
 
     if (intent === "PMC") {
-      const matches = await retrieveKB(question);
-      const context = matches.map(m => m.text).join("\n\n");
+      const kbMatches = await retrieveKB(question);
+      let context = kbMatches.map(m => m.text).join("\n\n");
+
+      if (context.length < 800) {
+        const siteText = await fetchPmcCentreContent();
+        context += "\n\n" + siteText;
+      }
 
       const r = await openai.responses.create({
         model: "gpt-5.2",
@@ -235,19 +226,17 @@ app.post("/ask", async (req, res) => {
           {
             role: "system",
             content:
-              "You are PMC CENTRE AI. Answer professionally and practically. " +
-              "Use plain text only. Do not use markdown, bullets, or asterisks."
+              "You are PMC CENTRE AI. Answer professionally and practically. Use plain text only. Do not use markdown, bullets, or asterisks."
           },
           {
             role: "user",
-            content:
-              "Context:\n" + context + "\n\nQuestion:\n" + question
+            content: "Context:\n" + context + "\n\nQuestion:\n" + question
           }
         ],
         max_output_tokens: 600
       });
 
-      answer = r.output_text || "No answer generated.";
+      answer = r.output_text || "";
 
     } else {
       const r = await openai.responses.create({
@@ -255,30 +244,22 @@ app.post("/ask", async (req, res) => {
         input: question,
         max_output_tokens: 400
       });
-
-      answer = r.output_text || "No answer generated.";
+      answer = r.output_text || "";
     }
 
-    return res.json({ intent, answer });
+    res.json({ intent, answer });
 
   } catch (err) {
-    console.error("❌ ASK ERROR:", err);
-    return res.status(500).json({
-      intent: "ERROR",
-      answer: "Backend error occurred. Please check Render logs."
-    });
+    console.error(err);
+    res.status(500).json({ intent: "ERROR", answer: "Backend error." });
   }
 });
 
 /* ===============================
-   HEALTH
+   START SERVER
    =============================== */
-
-app.get("/", (_, res) => {
-  res.send("PMC CENTRE AI backend running");
-});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("🚀 Server running on port", PORT);
+  console.log("Server running on port", PORT);
 });
