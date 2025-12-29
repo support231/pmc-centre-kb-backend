@@ -174,9 +174,14 @@ async function detectIntent(question) {
     max_output_tokens: 16
   });
 
-  const text = r.output_text || "";
+  const text =
+    r.output_text ||
+    r.output?.[0]?.content?.[0]?.text ||
+    "";
+
   return text.toUpperCase().includes("PMC") ? "PMC" : "GENERAL";
 }
+
 
 /* ===============================
    KB RETRIEVAL
