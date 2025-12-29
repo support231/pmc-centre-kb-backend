@@ -1,11 +1,18 @@
 import fs from "fs";
 import path from "path";
 import express from "express";
+import cors from "cors";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
 import OpenAI from "openai";
 
 const app = express();
+
+/* ===============================
+   CORS (REQUIRED FOR BROWSER CALLS)
+   =============================== */
+
+app.use(cors());
 app.use(express.json());
 
 /* ===============================
@@ -154,7 +161,7 @@ console.log("🔹 EMBEDDINGS PIPELINE START");
 })();
 
 /* ===============================
-   INTENT DETECTION
+   INTENT DETECTION (AI-ONLY)
    =============================== */
 
 async function detectIntent(question) {
@@ -182,7 +189,6 @@ async function detectIntent(question) {
   return text.toUpperCase().includes("PMC") ? "PMC" : "GENERAL";
 }
 
-
 /* ===============================
    KB RETRIEVAL
    =============================== */
@@ -202,7 +208,7 @@ async function retrieveKB(question) {
 }
 
 /* ===============================
-   ASK ENDPOINT (FINAL)
+   ASK ENDPOINT
    =============================== */
 
 app.post("/ask", async (req, res) => {
@@ -221,7 +227,6 @@ app.post("/ask", async (req, res) => {
 
     if (intent === "PMC") {
       const matches = await retrieveKB(question);
-
       const context = matches.map(m => m.text).join("\n\n");
 
       const r = await openai.responses.create({
@@ -270,7 +275,7 @@ app.post("/ask", async (req, res) => {
    =============================== */
 
 app.get("/", (_, res) => {
-  res.send("PMC CENTRE AI backend running (Answer Generation v1)");
+  res.send("PMC CENTRE AI backend running");
 });
 
 const PORT = process.env.PORT || 3000;
