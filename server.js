@@ -2,9 +2,8 @@ import fs from "fs";
 import path from "path";
 import express from "express";
 import cors from "cors";
-import mammoth from "mammoth";
-import pdfParse from "pdf-parse";
 import OpenAI from "openai";
+import { upload, extractUploadedText } from "./upload.js";
 
 const app = express();
 app.use(cors());
@@ -42,12 +41,15 @@ function scanKB(dir, files = []) {
   return files;
 }
 
-async function extractText(file) {
+async function extractKBText(file) {
   if (file.endsWith(".docx")) {
-    const r = await mammoth.extractRawText({ path: file });
+    const r = await import("mammoth").then(m =>
+      m.extractRawText({ path: file })
+    );
     return r.value || "";
   }
   if (file.endsWith(".pdf")) {
+    const pdfParse = (await import("pdf-parse")).default;
     const r = await pdfParse(fs.readFileSync(file));
     return r.text || "";
   }
@@ -68,7 +70,7 @@ function chunkText(text) {
 (async () => {
   const files = scanKB(KB_ROOT);
   for (const f of files) {
-    const text = await extractText(f);
+    const text = await extractKBText(f);
     for (const chunk of chunkText(text)) {
       const e = await openai.embeddings.create({
         model: "text-embedding-3-large",
@@ -84,43 +86,8 @@ function chunkText(text) {
 })();
 
 /* ===============================
-   KB RETRIEVAL
-   =============================== */
-
-async function retrieveKB(question) {
-  const qEmb = await openai.embeddings.create({
-    model: "text-embedding-3-large",
-    input: question
-  });
-  const qVec = qEmb.data[0].embedding;
-
-  return kbChunks
-    .map(c => ({
-      text: c.text,
-      score: c.embedding.reduce((s, v, i) => s + v * qVec[i], 0)
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, TOP_K);
-}
-
-/* ===============================
    DETECTION HELPERS
    =============================== */
-
-function extractYear(q) {
-  const m = q.match(/\b20(2[3-9]|3[0-5])\b/);
-  return m ? m[0] : null;
-}
-
-function isFactualCurrentPMC(q) {
-  const t = q.toLowerCase();
-  const triggers = [
-    "recent", "latest", "announce", "announced", "launch",
-    "introduced", "press release", "news", "update"
-  ];
-  if (extractYear(q)) return true;
-  return triggers.some(w => t.includes(w));
-}
 
 function isCurrentGeneral(q) {
   const t = q.toLowerCase();
@@ -139,7 +106,6 @@ function isCurrentGeneral(q) {
 const PMC_SYSTEM_INSTRUCTION = `
 You are PMC CENTRE AI. Answer professionally and practically for paper machine clothing experts.
 Rules:
-- Give a complete answer within the allowed length.
 - Keep answers factual and verifiable.
 - Use plain text only.
 `;
@@ -147,113 +113,105 @@ Rules:
 const GENERAL_SYSTEM_INSTRUCTION = `
 Answer clearly and factually.
 Use plain paragraphs only.
-Do not use bullets, numbering, markdown, or special formatting.
 If verification is not possible, say so clearly.
 `;
 
 const LIVE_SYSTEM_INSTRUCTION = `
 You are a LIVE WEB INFORMATION assistant.
-
 Rules:
-- Use ONLY live web search results
-- Do NOT use PMC knowledge base
-- Do NOT provide PMC technical advice
-- If information is uncertain, say so clearly
-- Be neutral and factual
-- Begin every answer with:
-  "Based on live web information as of today:"
+- Use only live web information.
+- Do not provide PMC technical advice.
+- Be transparent and factual.
+- Start answers with: "Based on live web information as of today:"
 `;
 
 /* ===============================
    ASK ENDPOINT
    =============================== */
 
-app.post("/ask", async (req, res) => {
+app.post("/ask", upload.single("file"), async (req, res) => {
   try {
     const { question, mode } = req.body;
     let answer = "";
 
-    /* ---------- PMC MODE (UNCHANGED) ---------- */
-    if (mode === "PMC") {
-      let pmcFactual = isFactualCurrentPMC(question);
-      let usedKB = false;
-      let context = "";
+    /* ---------- FILE CONTEXT ---------- */
+    let uploadedText = "";
+    if (req.file) {
+      uploadedText = await extractUploadedText(req.file);
+      if (uploadedText.length > 6000) {
+        uploadedText = uploadedText.slice(0, 6000);
+      }
+      console.log("[UPLOAD]", req.file.originalname, req.file.size);
+    }
 
-      if (pmcFactual) {
-        answer =
-          "This question relates to recent or time-bound factual information. " +
-          "PMC Expert Mode does not provide live announcements.";
-      } else {
-        const kb = await retrieveKB(question);
-        if (kb.length > 0) {
-          usedKB = true;
-          context = kb.map(k => k.text).join("\n\n");
-        }
-
-        if (context.length < 400) {
-          answer =
-            "This question requires case-specific technical review. " +
-            "Please contact support@pmccentre.com for expert assistance.";
-        } else {
-          const r = await openai.responses.create({
-            model: "gpt-5.2",
-            input: [
-              { role: "system", content: PMC_SYSTEM_INSTRUCTION },
-              { role: "user", content: "Context:\n" + context + "\n\nQuestion:\n" + question }
-            ],
-            max_output_tokens: 600
-          });
-          answer = r.output_text || "";
-        }
+    /* ---------- LIVE MODE ---------- */
+    if (mode === "LIVE") {
+      if (req.file) {
+        return res.json({
+          answer:
+            "Live Web Search does not support document or image analysis. " +
+            "Please remove the file or switch to PMC or General mode."
+        });
       }
 
-      console.log("[PMC MODE] KB used:", usedKB);
+      try {
+        const r = await openai.responses.create({
+          model: "gpt-5.2",
+          tools: [{ type: "web_search" }],
+          input: [
+            { role: "system", content: LIVE_SYSTEM_INSTRUCTION },
+            { role: "user", content: question }
+          ],
+          max_output_tokens: 450
+        });
+
+        answer = r.output_text || "";
+      } catch {
+        answer =
+          "Based on live web information as of today: " +
+          "Live sources could not be reached reliably. Please retry later or contact support@pmccentre.com.";
+      }
     }
 
-   
-    /* ---------- LIVE MODE (SAFE FALLBACK) ---------- */
-else if (mode === "LIVE") {
-  console.log("[LIVE MODE] Web search enabled");
+    /* ---------- PMC MODE ---------- */
+    else if (mode === "PMC") {
+      const r = await openai.responses.create({
+        model: "gpt-5.2",
+        input: [
+          { role: "system", content: PMC_SYSTEM_INSTRUCTION },
+          {
+            role: "user",
+            content:
+              uploadedText
+                ? "Uploaded material:\n" +
+                  uploadedText +
+                  "\n\nQuestion:\n" +
+                  question
+                : question
+          }
+        ],
+        max_output_tokens: 600
+      });
 
-  try {
-    const r = await openai.responses.create({
-      model: "gpt-5.2",
-      tools: [{ type: "web_search" }],
-      input: [
-        { role: "system", content: LIVE_SYSTEM_INSTRUCTION },
-        { role: "user", content: question }
-      ],
-      max_output_tokens: 450
-    });
-
-    answer = r.output_text || "";
-
-    if (!answer || answer.trim().length < 40) {
-      answer =
-        "Based on live web information as of today: " +
-        "Live sources did not return sufficient verified data for this query. " +
-        "Please try again shortly or contact support@pmccentre.com.";
+      answer = r.output_text || "";
     }
 
-  } catch (liveErr) {
-    console.error("[LIVE MODE ERROR]", liveErr);
-
-    answer =
-      "Based on live web information as of today: " +
-      "Live web sources could not be reliably reached at this moment. " +
-      "Please retry after some time or contact support@pmccentre.com.";
-  }
-}
-
-    /* ---------- GENERAL MODE (UNCHANGED) ---------- */
+    /* ---------- GENERAL MODE ---------- */
     else {
-      const current = isCurrentGeneral(question);
-
       const r = await openai.responses.create({
         model: "gpt-5.2",
         input: [
           { role: "system", content: GENERAL_SYSTEM_INSTRUCTION },
-          { role: "user", content: question }
+          {
+            role: "user",
+            content:
+              uploadedText
+                ? "Document:\n" +
+                  uploadedText +
+                  "\n\nQuestion:\n" +
+                  question
+                : question
+          }
         ],
         max_output_tokens: 400
       });
@@ -262,11 +220,8 @@ else if (mode === "LIVE") {
 
       if (!answer || answer.trim().length < 30) {
         answer =
-          "This question may require clarification or reliable external verification. " +
-          "Please rephrase or provide more specific details.";
+          "This question may require clarification or reliable external verification.";
       }
-
-      console.log("[GENERAL MODE] Current topic:", current);
     }
 
     res.json({ answer });
@@ -274,7 +229,8 @@ else if (mode === "LIVE") {
   } catch (err) {
     console.error("ASK ERROR:", err);
     res.status(500).json({
-      answer: "Backend error occurred. Please try again later."
+      answer:
+        "Backend error occurred while processing your request. Please try again later."
     });
   }
 });
