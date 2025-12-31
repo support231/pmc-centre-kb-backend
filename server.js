@@ -18,96 +18,40 @@ const openai = new OpenAI({
 });
 
 /* ===============================
-   KB CONFIG
-   =============================== */
-
-const KB_ROOT = path.join(process.cwd(), "KB");
-const CHUNK_SIZE = 1200;
-const CHUNK_OVERLAP = 200;
-
-let kbChunks = [];
-
-/* ===============================
-   KB LOAD & EMBED
-   =============================== */
-
-function scanKB(dir, files = []) {
-  for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, item.name);
-    if (item.isDirectory()) scanKB(full, files);
-    else files.push(full);
-  }
-  return files;
-}
-
-async function extractKBText(file) {
-  if (file.endsWith(".docx")) {
-    const r = await import("mammoth").then(m =>
-      m.extractRawText({ path: file })
-    );
-    return r.value || "";
-  }
-  if (file.endsWith(".pdf")) {
-    const pdfParse = (await import("pdf-parse")).default;
-    const r = await pdfParse(fs.readFileSync(file));
-    return r.text || "";
-  }
-  return "";
-}
-
-function chunkText(text) {
-  const chunks = [];
-  let i = 0;
-  while (i < text.length) {
-    const c = text.slice(i, i + CHUNK_SIZE).trim();
-    if (c.length > 200) chunks.push(c);
-    i += CHUNK_SIZE - CHUNK_OVERLAP;
-  }
-  return chunks;
-}
-
-(async () => {
-  const files = scanKB(KB_ROOT);
-  for (const f of files) {
-    const text = await extractKBText(f);
-    for (const chunk of chunkText(text)) {
-      const e = await openai.embeddings.create({
-        model: "text-embedding-3-large",
-        input: chunk
-      });
-      kbChunks.push({
-        text: chunk,
-        embedding: e.data[0].embedding
-      });
-    }
-  }
-  console.log("KB embeddings loaded:", kbChunks.length);
-})();
-
-/* ===============================
    SYSTEM INSTRUCTIONS
    =============================== */
 
-const PMC_SYSTEM_INSTRUCTION = `
-You are PMC CENTRE AI.
-Answer professionally and practically for paper machine clothing experts.
+const COMMON_RULES = `
+Critical rules (must follow strictly):
+- If the question is vague, ambiguous, or underspecified, ASK a clarifying question.
+- Do NOT say the request failed unless there is a real technical error.
+- Do NOT mention files, uploads, or removal unless a file is actually provided.
+- Never fabricate system or processing errors.
+- If a list is long, do not cut silently. Say if more items remain.
+`;
 
-Rules:
-- Prioritize technical correctness and completeness.
-- If a list is long, complete logical sections fully.
-- If more items remain, clearly say so and offer to continue.
-- Use plain text only.
+const PMC_SYSTEM_INSTRUCTION = `
+You are PMC CENTRE AI for paper machine clothing professionals.
+
+${COMMON_RULES}
+
+PMC-specific rules:
+- Prioritize technical correctness and practical clarity.
+- If input lacks machine type, section, grade, or operating conditions, ask for them.
+- Use clear, professional language.
+- Plain text only.
 `;
 
 const GENERAL_SYSTEM_INSTRUCTION = `
-Answer clearly and factually.
+You are a General AI Assistant.
 
-Rules:
-- Do not hallucinate completeness.
-- If full verification is not possible, state that clearly.
-- If an answer is long, do not truncate silently.
-- If more content remains, explicitly say "More available on request."
-- Use plain paragraphs only.
+${COMMON_RULES}
+
+General rules:
+- Answer clearly and factually.
+- If completeness cannot be guaranteed, say so politely.
+- Ask clarifying questions instead of refusing.
+- Plain paragraphs only.
 `;
 
 const LIVE_SYSTEM_INSTRUCTION = `
@@ -115,19 +59,19 @@ You are a LIVE WEB INFORMATION assistant.
 
 Rules:
 - Use only live web information.
-- Do not provide PMC technical advice.
-- Be transparent and factual.
+- Do NOT provide PMC technical advice.
 - Start answers with: "Based on live web information as of today:"
+- If the query is unclear, ask a clarifying question.
 `;
 
 /* ===============================
    HELPER
    =============================== */
 
-function appendContinuationNotice(answer) {
-  if (!answer) return answer;
+function ensureGracefulEnding(text) {
+  if (!text) return "";
 
-  const trimmed = answer.trim();
+  const trimmed = text.trim();
   const lastChar = trimmed.slice(-1);
 
   if (
@@ -136,7 +80,7 @@ function appendContinuationNotice(answer) {
   ) {
     return (
       trimmed +
-      "\n\nMore items remain. Ask me to continue if you want the full list."
+      "\n\nMore information is available. Ask me to continue if needed."
     );
   }
   return trimmed;
@@ -146,32 +90,47 @@ function appendContinuationNotice(answer) {
    ASK ENDPOINT
    =============================== */
 
-app.post("/ask", upload.single("file"), async (req, res) => {
-  try {
-    const { question, mode } = req.body;
-    let answer = "";
+app.post("/ask", (req, res) => {
+  upload.single("file")(req, res, async (uploadErr) => {
 
-    /* ---------- FILE CONTEXT ---------- */
-    let uploadedText = "";
-    if (req.file) {
-      uploadedText = await extractUploadedText(req.file);
-      if (uploadedText.length > 6000) {
-        uploadedText = uploadedText.slice(0, 6000);
-      }
-      console.log("[UPLOAD]", req.file.originalname, req.file.size);
+    /* ---------- MULTER ERRORS ---------- */
+    if (uploadErr) {
+      return res.json({
+        answer:
+          uploadErr.message === "Unsupported file type"
+            ? "This file format is not supported. Please upload PDF, Word, text, or image files."
+            : "There was a problem processing the uploaded file. Please try a smaller file."
+      });
     }
 
-    /* ---------- LIVE MODE ---------- */
-    if (mode === "LIVE") {
-      if (req.file) {
+    try {
+      const { question, mode } = req.body;
+      let answer = "";
+
+      if (!question || !question.trim()) {
         return res.json({
-          answer:
-            "Current Updates mode does not support document or image analysis. " +
-            "Please remove the file or switch to PMC or General mode."
+          answer: "Could you please clarify what you would like to know?"
         });
       }
 
-      try {
+      /* ---------- FILE CONTEXT ---------- */
+      let uploadedText = "";
+      if (req.file) {
+        uploadedText = await extractUploadedText(req.file);
+        if (uploadedText.length > 6000) {
+          uploadedText = uploadedText.slice(0, 6000);
+        }
+      }
+
+      /* ---------- LIVE MODE ---------- */
+      if (mode === "LIVE") {
+        if (req.file) {
+          return res.json({
+            answer:
+              "Current Updates mode does not support document or image analysis. Please switch to PMC or General mode."
+          });
+        }
+
         const r = await openai.responses.create({
           model: "gpt-5.2",
           tools: [{ type: "web_search" }],
@@ -183,75 +142,63 @@ app.post("/ask", upload.single("file"), async (req, res) => {
         });
 
         answer = r.output_text || "";
-      } catch {
-        answer =
-          "Based on live web information as of today: " +
-          "Live sources could not be reached reliably. Please try again later.";
       }
-    }
 
-    /* ---------- PMC MODE ---------- */
-    else if (mode === "PMC") {
-      const r = await openai.responses.create({
-        model: "gpt-5.2",
-        input: [
-          { role: "system", content: PMC_SYSTEM_INSTRUCTION },
-          {
-            role: "user",
-            content:
-              uploadedText
-                ? "Uploaded material:\n" +
-                  uploadedText +
-                  "\n\nQuestion:\n" +
-                  question
-                : question
-          }
-        ],
-        max_output_tokens: 800
-      });
+      /* ---------- PMC MODE ---------- */
+      else if (mode === "PMC") {
+        const r = await openai.responses.create({
+          model: "gpt-5.2",
+          input: [
+            { role: "system", content: PMC_SYSTEM_INSTRUCTION },
+            {
+              role: "user",
+              content:
+                uploadedText
+                  ? `Uploaded material:\n${uploadedText}\n\nQuestion:\n${question}`
+                  : question
+            }
+          ],
+          max_output_tokens: 800
+        });
 
-      answer = appendContinuationNotice(r.output_text || "");
-    }
-
-    /* ---------- GENERAL MODE ---------- */
-    else {
-      const r = await openai.responses.create({
-        model: "gpt-5.2",
-        input: [
-          { role: "system", content: GENERAL_SYSTEM_INSTRUCTION },
-          {
-            role: "user",
-            content:
-              uploadedText
-                ? "Document:\n" +
-                  uploadedText +
-                  "\n\nQuestion:\n" +
-                  question
-                : question
-          }
-        ],
-        max_output_tokens: 600
-      });
-
-      answer = appendContinuationNotice(r.output_text || "");
-
-      if (!answer || answer.trim().length < 20) {
-        answer =
-          "I may need clarification or authoritative verification to answer this reliably. " +
-          "Please refine the question or ask for a standard accepted list.";
+        answer = ensureGracefulEnding(r.output_text || "");
       }
+
+      /* ---------- GENERAL MODE ---------- */
+      else {
+        const r = await openai.responses.create({
+          model: "gpt-5.2",
+          input: [
+            { role: "system", content: GENERAL_SYSTEM_INSTRUCTION },
+            {
+              role: "user",
+              content:
+                uploadedText
+                  ? `Document:\n${uploadedText}\n\nQuestion:\n${question}`
+                  : question
+            }
+          ],
+          max_output_tokens: 600
+        });
+
+        answer = ensureGracefulEnding(r.output_text || "");
+      }
+
+      if (!answer || answer.trim().length < 10) {
+        answer =
+          "Could you please clarify your question so I can answer more precisely?";
+      }
+
+      res.json({ answer });
+
+    } catch (err) {
+      console.error("ASK ERROR:", err);
+      res.status(500).json({
+        answer:
+          "A temporary system issue occurred. Please try again in a moment."
+      });
     }
-
-    res.json({ answer });
-
-  } catch (err) {
-    console.error("ASK ERROR:", err);
-    res.status(500).json({
-      answer:
-        "A temporary backend error occurred while processing your request. " +
-        "Please retry in a moment."
-    });
-  }
+  });
 });
 
 /* ===============================
