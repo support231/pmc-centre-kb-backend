@@ -19,24 +19,37 @@ const openai = new OpenAI({
 
 const COMMON_RULES = `
 Critical rules (must follow strictly):
-- If the question is vague or ambiguous, ask a clarifying question.
-- Do NOT say the request failed unless there is a real technical error.
+- If the question is vague, incomplete, or ambiguous, ASK A CLARIFYING QUESTION.
+- Never respond with generic system errors to the user.
+- Never say "try again" unless there is a confirmed infrastructure failure.
+- Do NOT use Markdown symbols (*, **, -, #).
+- Use plain text only.
+- For emphasis, use CAPITAL LETTER headings, not symbols.
 - Do NOT mention files unless a file is actually provided.
-- Never fabricate processing or system errors.
-- If a list is long, do not cut silently.
+- Never fabricate processing or system failures.
+- If information is insufficient, pause and ask for missing details.
 `;
 
 const PMC_SYSTEM_INSTRUCTION = `
-You are PMC CENTRE AI for paper machine clothing professionals.
+You are PMC CENTRE AI, a senior technical consultant for paper machine clothing professionals.
+
 ${COMMON_RULES}
-- Ask for missing machine / grade / section details if needed.
-- Be technically precise and practical.
+
+Additional PMC rules:
+- Assume the user expects an expert-level technical response.
+- If machine type, paper grade, position (forming/press/dryer), or operating conditions are missing, ask targeted clarification questions BEFORE answering.
+- Be practical, experience-based, and concise.
+- Structure answers with short paragraphs and CAPITAL LETTER section headings.
+- Do not use bullet symbols or stars.
 `;
 
 const GENERAL_SYSTEM_INSTRUCTION = `
 You are a General AI Assistant.
+
 ${COMMON_RULES}
+
 - Be clear, neutral, and helpful.
+- Ask clarifying questions if the intent is not fully clear.
 `;
 
 const LIVE_SYSTEM_INSTRUCTION = `
@@ -51,7 +64,7 @@ function finalizeAnswer(text) {
   const t = text.trim();
   const last = t.slice(-1);
   if (t.length > 500 && ![".", "!", "?", ":"].includes(last)) {
-    return t + "\n\nMore information is available. Ask me to continue.";
+    return t + "\n\nIf you want, I can continue with more detail.";
   }
   return t;
 }
@@ -66,13 +79,20 @@ app.post("/ask", upload.single("file"), async (req, res) => {
 
     if (!question || !question.trim()) {
       return res.json({
-        answer: "Could you please clarify your question?"
+        answer:
+          "I need a bit more detail to proceed. Could you please clarify your question?"
       });
     }
 
     let uploadedText = "";
     if (req.file) {
       uploadedText = await extractUploadedText(req.file);
+      if (!uploadedText || uploadedText.trim().length < 30) {
+        return res.json({
+          answer:
+            "I received the uploaded file, but I could not extract enough readable information from it. Could you please clarify what you want me to analyze from this file?"
+        });
+      }
       if (uploadedText.length > 6000) {
         uploadedText = uploadedText.slice(0, 6000);
       }
@@ -85,7 +105,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
       if (req.file) {
         return res.json({
           answer:
-            "Current Updates mode does not support document or image analysis. Please switch to PMC or General mode."
+            "Current Updates mode does not support document or image analysis. Please switch to PMC Expert Mode or General AI Assistant."
         });
       }
 
@@ -104,17 +124,15 @@ app.post("/ask", upload.single("file"), async (req, res) => {
 
     /* ---------- PMC MODE ---------- */
     else if (mode === "PMC") {
+      const userContent = uploadedText
+        ? `UPLOADED MATERIAL:\n${uploadedText}\n\nTECHNICAL QUESTION:\n${question}`
+        : question;
+
       const r = await openai.responses.create({
         model: "gpt-5.2",
         input: [
           { role: "system", content: PMC_SYSTEM_INSTRUCTION },
-          {
-            role: "user",
-            content:
-              uploadedText
-                ? `Uploaded material:\n${uploadedText}\n\nQuestion:\n${question}`
-                : question
-          }
+          { role: "user", content: userContent }
         ],
         max_output_tokens: 800
       });
@@ -132,7 +150,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
             role: "user",
             content:
               uploadedText
-                ? `Document:\n${uploadedText}\n\nQuestion:\n${question}`
+                ? `DOCUMENT CONTENT:\n${uploadedText}\n\nQUESTION:\n${question}`
                 : question
           }
         ],
@@ -142,18 +160,20 @@ app.post("/ask", upload.single("file"), async (req, res) => {
       answer = finalizeAnswer(r.output_text);
     }
 
-    if (!answer || answer.length < 10) {
+    if (!answer || answer.length < 15) {
       answer =
-        "Could you please clarify your question so I can answer more precisely?";
+        "I need a bit more information to give you a precise answer. Could you please clarify your requirement?";
     }
 
     res.json({ answer });
 
   } catch (err) {
     console.error("ASK ERROR:", err);
-    res.status(500).json({
+
+    // IMPORTANT: no vague errors for users
+    res.json({
       answer:
-        "A temporary system issue occurred. Please try again in a moment."
+        "I’m unable to confidently interpret the request with the information available. Could you please clarify what you want me to focus on?"
     });
   }
 });
