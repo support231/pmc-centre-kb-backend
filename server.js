@@ -24,7 +24,6 @@ const openai = new OpenAI({
 const KB_ROOT = path.join(process.cwd(), "KB");
 const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 200;
-const TOP_K = 5;
 
 let kbChunks = [];
 
@@ -86,44 +85,62 @@ function chunkText(text) {
 })();
 
 /* ===============================
-   DETECTION HELPERS
-   =============================== */
-
-function isCurrentGeneral(q) {
-  const t = q.toLowerCase();
-  return (
-    t.includes("today") ||
-    t.includes("current") ||
-    t.includes("latest") ||
-    t.includes("now")
-  );
-}
-
-/* ===============================
    SYSTEM INSTRUCTIONS
    =============================== */
 
 const PMC_SYSTEM_INSTRUCTION = `
-You are PMC CENTRE AI. Answer professionally and practically for paper machine clothing experts.
+You are PMC CENTRE AI.
+Answer professionally and practically for paper machine clothing experts.
+
 Rules:
-- Keep answers factual and verifiable.
+- Prioritize technical correctness and completeness.
+- If a list is long, complete logical sections fully.
+- If more items remain, clearly say so and offer to continue.
 - Use plain text only.
 `;
 
 const GENERAL_SYSTEM_INSTRUCTION = `
 Answer clearly and factually.
-Use plain paragraphs only.
-If verification is not possible, say so clearly.
+
+Rules:
+- Do not hallucinate completeness.
+- If full verification is not possible, state that clearly.
+- If an answer is long, do not truncate silently.
+- If more content remains, explicitly say "More available on request."
+- Use plain paragraphs only.
 `;
 
 const LIVE_SYSTEM_INSTRUCTION = `
 You are a LIVE WEB INFORMATION assistant.
+
 Rules:
 - Use only live web information.
 - Do not provide PMC technical advice.
 - Be transparent and factual.
 - Start answers with: "Based on live web information as of today:"
 `;
+
+/* ===============================
+   HELPER
+   =============================== */
+
+function appendContinuationNotice(answer) {
+  if (!answer) return answer;
+
+  const trimmed = answer.trim();
+  const lastChar = trimmed.slice(-1);
+
+  if (
+    trimmed.length > 500 &&
+    ![".", "!", "?", ":"].includes(lastChar)
+  ) {
+    return (
+      trimmed +
+      "\n\nMore items remain. Ask me to continue if you want the full list."
+    );
+  }
+  return trimmed;
+}
 
 /* ===============================
    ASK ENDPOINT
@@ -149,7 +166,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
       if (req.file) {
         return res.json({
           answer:
-            "Live Web Search does not support document or image analysis. " +
+            "Current Updates mode does not support document or image analysis. " +
             "Please remove the file or switch to PMC or General mode."
         });
       }
@@ -169,7 +186,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
       } catch {
         answer =
           "Based on live web information as of today: " +
-          "Live sources could not be reached reliably. Please retry later or contact support@pmccentre.com.";
+          "Live sources could not be reached reliably. Please try again later.";
       }
     }
 
@@ -190,10 +207,10 @@ app.post("/ask", upload.single("file"), async (req, res) => {
                 : question
           }
         ],
-        max_output_tokens: 600
+        max_output_tokens: 800
       });
 
-      answer = r.output_text || "";
+      answer = appendContinuationNotice(r.output_text || "");
     }
 
     /* ---------- GENERAL MODE ---------- */
@@ -213,14 +230,15 @@ app.post("/ask", upload.single("file"), async (req, res) => {
                 : question
           }
         ],
-        max_output_tokens: 400
+        max_output_tokens: 600
       });
 
-      answer = r.output_text || "";
+      answer = appendContinuationNotice(r.output_text || "");
 
-      if (!answer || answer.trim().length < 30) {
+      if (!answer || answer.trim().length < 20) {
         answer =
-          "This question may require clarification or reliable external verification.";
+          "I may need clarification or authoritative verification to answer this reliably. " +
+          "Please refine the question or ask for a standard accepted list.";
       }
     }
 
@@ -230,7 +248,8 @@ app.post("/ask", upload.single("file"), async (req, res) => {
     console.error("ASK ERROR:", err);
     res.status(500).json({
       answer:
-        "Backend error occurred while processing your request. Please try again later."
+        "A temporary backend error occurred while processing your request. " +
+        "Please retry in a moment."
     });
   }
 });
