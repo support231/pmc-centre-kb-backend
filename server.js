@@ -3,9 +3,13 @@ import express from "express";
 import cors from "cors";
 import OpenAI from "openai";
 import { upload, extractUploadedText } from "./upload.js";
+import { initKB, searchKB } from "./kb.js";
 
 const app = express();
 app.use(cors());
+
+// Load KB files into memory at startup
+initKB();
 
 /* IMPORTANT: DO NOT use express.json() for multipart routes */
 /* Multer must handle the body first */
@@ -125,6 +129,21 @@ app.post("/ask", upload.single("file"), async (req, res) => {
 
     /* ---------- PMC MODE ---------- */
     else if (mode === "PMC") {
+      // Search the knowledge base for relevant context
+      console.log(`[ASK] PMC question received: "${question.slice(0, 80)}..."`); 
+      const kbContext = searchKB(question);
+
+      let systemWithKB = PMC_SYSTEM_INSTRUCTION;
+      if (kbContext) {
+        systemWithKB += `
+
+KNOWLEDGE BASE CONTEXT (use this as your primary source):
+${kbContext}`;
+        console.log("[ASK] KB context injected into prompt");
+      } else {
+        console.log("[ASK] No KB context found — answering from general knowledge");
+      }
+
       const userContent = uploadedText
         ? `UPLOADED MATERIAL:\n${uploadedText}\n\nTECHNICAL QUESTION:\n${question}`
         : question;
@@ -132,13 +151,14 @@ app.post("/ask", upload.single("file"), async (req, res) => {
       const r = await openai.responses.create({
         model: "gpt-5.2",
         input: [
-          { role: "system", content: PMC_SYSTEM_INSTRUCTION },
+          { role: "system", content: systemWithKB },
           { role: "user", content: userContent }
         ],
         max_output_tokens: 800
       });
 
       answer = finalizeAnswer(r.output_text);
+      console.log(`[ASK] PMC answer generated (${answer.length} chars)`);
     }
 
     /* ---------- GENERAL MODE ---------- */
