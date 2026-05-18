@@ -80,7 +80,23 @@ function finalizeAnswer(text) {
 
 app.post("/ask", upload.single("file"), async (req, res) => {
   try {
-    const { question, mode } = req.body;
+    const { question, mode, history: historyRaw } = req.body;
+
+    // Parse conversation history sent from frontend
+    let history = [];
+    try {
+      history = historyRaw ? JSON.parse(historyRaw) : [];
+    } catch {
+      history = [];
+    }
+    // Build OpenAI-formatted prior turns (exclude the current question — it's added below)
+    const historyTurns = history
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    if (historyTurns.length > 0) {
+      console.log(`[ASK] Using ${historyTurns.length} history turns for context`);
+    }
 
     if (!question || !question.trim()) {
       return res.json({
@@ -119,6 +135,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
         tools: [{ type: "web_search" }],
         input: [
           { role: "system", content: LIVE_SYSTEM_INSTRUCTION },
+          ...historyTurns,
           { role: "user", content: question }
         ],
         max_output_tokens: 450
@@ -152,6 +169,7 @@ ${kbContext}`;
         model: "gpt-5.2",
         input: [
           { role: "system", content: systemWithKB },
+          ...historyTurns,
           { role: "user", content: userContent }
         ],
         max_output_tokens: 800
@@ -167,12 +185,12 @@ ${kbContext}`;
         model: "gpt-5.2",
         input: [
           { role: "system", content: GENERAL_SYSTEM_INSTRUCTION },
+          ...historyTurns,
           {
             role: "user",
-            content:
-              uploadedText
-                ? `DOCUMENT CONTENT:\n${uploadedText}\n\nQUESTION:\n${question}`
-                : question
+            content: uploadedText
+              ? `DOCUMENT CONTENT:\n${uploadedText}\n\nQUESTION:\n${question}`
+              : question
           }
         ],
         max_output_tokens: 600
