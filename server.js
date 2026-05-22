@@ -119,6 +119,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
     }
 
     let answer = "";
+    let tokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
     /* ---------- LIVE MODE ---------- */
     if (mode === "LIVE") {
@@ -141,6 +142,15 @@ app.post("/ask", upload.single("file"), async (req, res) => {
       });
 
       answer = r.output_text || "";
+
+      // Extract token usage
+      if (r.usage) {
+        tokenUsage = {
+          inputTokens: r.usage.input_tokens || 0,
+          outputTokens: r.usage.output_tokens || 0,
+          totalTokens: (r.usage.input_tokens || 0) + (r.usage.output_tokens || 0),
+        };
+      }
     }
 
     /* ---------- PMC MODE ---------- */
@@ -176,6 +186,14 @@ ${kbContext}`;
 
       answer = finalizeAnswer(r.output_text);
       console.log(`[ASK] PMC answer generated (${answer.length} chars)`);
+
+      if (r.usage) {
+        tokenUsage = {
+          inputTokens: r.usage.input_tokens || 0,
+          outputTokens: r.usage.output_tokens || 0,
+          totalTokens: (r.usage.input_tokens || 0) + (r.usage.output_tokens || 0),
+        };
+      }
     }
 
     /* ---------- GENERAL MODE ---------- */
@@ -196,6 +214,14 @@ ${kbContext}`;
       });
 
       answer = finalizeAnswer(r.output_text);
+
+      if (r.usage) {
+        tokenUsage = {
+          inputTokens: r.usage.input_tokens || 0,
+          outputTokens: r.usage.output_tokens || 0,
+          totalTokens: (r.usage.input_tokens || 0) + (r.usage.output_tokens || 0),
+        };
+      }
     }
 
     if (!answer || answer.length < 15) {
@@ -203,7 +229,8 @@ ${kbContext}`;
         "I need a bit more information to give you a precise answer. Could you please clarify your requirement?";
     }
 
-    res.json({ answer });
+    console.log(`[ASK] Tokens: in=${tokenUsage.inputTokens} out=${tokenUsage.outputTokens} total=${tokenUsage.totalTokens}`);
+    res.json({ answer, tokenUsage });
 
   } catch (err) {
     console.error("ASK ERROR:", err);
