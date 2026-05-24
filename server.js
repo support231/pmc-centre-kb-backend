@@ -49,9 +49,9 @@ function finalizeAnswer(text) {
 app.post("/ask", upload.single("file"), async (req, res) => {
   try {
     const { question, mode, plan, history: historyRaw } = req.body;
-    
+
     // Select model based on user's plan
-    const selectedModel = plan === "paid" ? "gpt-4.1" : "gpt-4.1-mini";
+    const selectedModel = plan === "paid" ? "gpt-5.2" : "gpt-4.1-mini";
     console.log(`[ASK] User plan: ${plan || 'free'} -> using model: ${selectedModel}`);
 
     // Parse conversation history sent from frontend
@@ -129,7 +129,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
     /* ---------- PMC MODE ---------- */
     else if (mode === "PMC") {
       // Search the knowledge base for relevant context
-      console.log(`[ASK] PMC question received: "${question.slice(0, 80)}..."`); 
+      console.log(`[ASK] PMC question received: "${question.slice(0, 80)}..."`);
       const kbContext = searchKB(question);
 
       let systemWithKB = PMC_SYSTEM_INSTRUCTION;
