@@ -48,7 +48,11 @@ function finalizeAnswer(text) {
 
 app.post("/ask", upload.single("file"), async (req, res) => {
   try {
-    const { question, mode, history: historyRaw } = req.body;
+    const { question, mode, plan, history: historyRaw } = req.body;
+    
+    // Select model based on user's plan
+    const selectedModel = plan === "paid" ? "gpt-4.1" : "gpt-4.1-mini";
+    console.log(`[ASK] User plan: ${plan || 'free'} -> using model: ${selectedModel}`);
 
     // Parse conversation history sent from frontend
     let history = [];
@@ -100,7 +104,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
       }
 
       const r = await openai.responses.create({
-        model: "gpt-4.1-mini",
+        model: selectedModel,
         tools: [{ type: "web_search" }],
         input: [
           { role: "system", content: LIVE_SYSTEM_INSTRUCTION },
@@ -144,7 +148,7 @@ ${kbContext}`;
         : question;
 
       const r = await openai.responses.create({
-        model: "gpt-4.1-mini",
+        model: selectedModel,
         input: [
           { role: "system", content: systemWithKB },
           ...historyTurns,
@@ -168,7 +172,7 @@ ${kbContext}`;
     /* ---------- GENERAL MODE ---------- */
     else {
       const r = await openai.responses.create({
-        model: "gpt-4.1-mini",
+        model: selectedModel,
         input: [
           { role: "system", content: GENERAL_SYSTEM_INSTRUCTION },
           ...historyTurns,
