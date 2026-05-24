@@ -22,46 +22,15 @@ const openai = new OpenAI({
    SYSTEM INSTRUCTIONS
    =============================== */
 
-const COMMON_RULES = `
-Critical rules (must follow strictly):
-- Never respond with generic system errors to the user.
-- Never say "try again" unless there is a confirmed infrastructure failure.
-- Do NOT use Markdown symbols (*, **, -, #).
-- Use plain text only.
-- For emphasis, use CAPITAL LETTER headings, not symbols.
-- Do NOT mention files unless a file is actually provided.
-- Never fabricate processing or system failures.
-- Always provide a direct, helpful answer. Do NOT ask clarifying questions.
-`;
+const COMMON_RULES = `Rules: No Markdown symbols. Use plain text with CAPITAL LETTER headings for emphasis. Never fabricate errors. Always answer directly without asking clarifying questions.`;
 
-const PMC_SYSTEM_INSTRUCTION = `
-You are PMC CENTRE AI, a senior technical consultant for paper machine clothing professionals.
-
+const PMC_SYSTEM_INSTRUCTION = `You are PMC CENTRE AI, a senior technical consultant for paper machine clothing (forming fabrics, press felts, dryer fabrics).
 ${COMMON_RULES}
+Assume expert-level audience. Provide comprehensive, practical answers. Cover common scenarios when specifics are missing. Structure with short paragraphs and CAPITAL LETTER headings.`;
 
-Additional PMC rules:
-- Assume the user expects an expert-level technical response.
-- Provide a comprehensive answer directly. Cover the most common scenarios if specific details like machine type, paper grade, or position are not provided.
-- Be practical, experience-based, and concise.
-- Structure answers with short paragraphs and CAPITAL LETTER section headings.
-- Do not use bullet symbols or stars.
-`;
+const GENERAL_SYSTEM_INSTRUCTION = `You are a General AI Assistant. ${COMMON_RULES} Be clear, neutral, and helpful.`;
 
-const GENERAL_SYSTEM_INSTRUCTION = `
-You are a General AI Assistant.
-
-${COMMON_RULES}
-
-- Be clear, neutral, and helpful.
-- Provide direct answers without asking clarifying questions.
-`;
-
-const LIVE_SYSTEM_INSTRUCTION = `
-You are a LIVE WEB INFORMATION assistant.
-- Use only live web information.
-- Start answers with: "Based on live web information as of today:"
-- Provide direct answers.
-`;
+const LIVE_SYSTEM_INSTRUCTION = `You are a LIVE WEB INFORMATION assistant. Use only live web information. Start answers with: "Based on live web information as of today:" ${COMMON_RULES}`;
 
 function finalizeAnswer(text) {
   if (!text) return "";
@@ -131,7 +100,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
       }
 
       const r = await openai.responses.create({
-        model: "gpt-5.2",
+        model: "gpt-4.1-mini",
         tools: [{ type: "web_search" }],
         input: [
           { role: "system", content: LIVE_SYSTEM_INSTRUCTION },
@@ -175,7 +144,7 @@ ${kbContext}`;
         : question;
 
       const r = await openai.responses.create({
-        model: "gpt-5.2",
+        model: "gpt-4.1-mini",
         input: [
           { role: "system", content: systemWithKB },
           ...historyTurns,
@@ -199,7 +168,7 @@ ${kbContext}`;
     /* ---------- GENERAL MODE ---------- */
     else {
       const r = await openai.responses.create({
-        model: "gpt-5.2",
+        model: "gpt-4.1-mini",
         input: [
           { role: "system", content: GENERAL_SYSTEM_INSTRUCTION },
           ...historyTurns,

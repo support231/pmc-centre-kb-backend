@@ -92,9 +92,9 @@ export function searchKB(question) {
 
   if (keywords.length === 0) return "";
 
-  const SNIPPET_SIZE = 600;     // chars around a keyword match
-  const MAX_SNIPPETS = 6;       // max snippets total
-  const MAX_CONTEXT_CHARS = 3000; // total context injected into prompt
+  const SNIPPET_SIZE = 400;     // chars around a keyword match (was 600)
+  const MAX_SNIPPETS = 4;       // max snippets total (was 6)
+  const MAX_CONTEXT_CHARS = 2000; // total context injected into prompt (was 3000)
 
   const snippets = [];
 
