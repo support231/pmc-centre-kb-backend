@@ -22,7 +22,7 @@ const openai = new OpenAI({
    SYSTEM INSTRUCTIONS
    =============================== */
 
-const COMMON_RULES = `Rules: No Markdown symbols. Use plain text with CAPITAL LETTER headings for emphasis. Never fabricate errors. Always answer directly without asking clarifying questions.`;
+const COMMON_RULES = `Rules: No Markdown symbols. Use plain text with CAPITAL LETTER headings for emphasis. Never fabricate errors. Always end your response with a relevant follow-up question or offer to provide more details.`;
 
 const PMC_SYSTEM_INSTRUCTION = `You are PMC CENTRE AI, a senior technical consultant for paper machine clothing (forming fabrics, press felts, dryer fabrics).
 ${COMMON_RULES}
@@ -34,10 +34,11 @@ const LIVE_SYSTEM_INSTRUCTION = `You are a LIVE WEB INFORMATION assistant. Use o
 
 function finalizeAnswer(text) {
   if (!text) return "";
-  const t = text.trim();
+  let t = text.trim();
   const last = t.slice(-1);
-  if (t.length > 500 && ![".", "!", "?", ":"].includes(last)) {
-    return t + "\n\nIf you want, I can continue with more detail.";
+  // If the text ends abruptly without punctuation, it likely hit the token limit
+  if (t.length > 100 && ![".", "!", "?", ":", '"', "'", ")"].includes(last)) {
+    t += "...\n\n[Message truncated due to length limit. Would you like me to continue?]";
   }
   return t;
 }
