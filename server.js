@@ -52,7 +52,9 @@ app.post("/ask", upload.single("file"), async (req, res) => {
     const { question, mode, plan, history: historyRaw } = req.body;
 
     // Select model based on user's plan
-    const selectedModel = plan === "paid" ? "gpt-5.2" : "gpt-4.1-mini";
+    let selectedModel = "gpt-4.1-mini"; // Default free
+    if (plan === "go") selectedModel = "gpt-4.1";
+    if (plan === "plus" || plan === "pro") selectedModel = "gpt-5.2";
     console.log(`[ASK] User plan: ${plan || 'free'} -> using model: ${selectedModel}`);
 
     // Parse conversation history sent from frontend
