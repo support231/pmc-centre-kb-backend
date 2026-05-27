@@ -22,7 +22,7 @@ const openai = new OpenAI({
    SYSTEM INSTRUCTIONS
    =============================== */
 
-const COMMON_RULES = `Rules: No Markdown symbols. Use plain text with CAPITAL LETTER headings for emphasis. Never fabricate errors. Always end your response with a relevant follow-up question or offer to provide more details.`;
+const COMMON_RULES = `Rules: No Markdown symbols. Use plain text with CAPITAL LETTER headings for emphasis. Never fabricate errors. Always finish your response completely — do not stop mid-sentence or mid-section. If you are running low on space, wrap up with a concise summary and end with a relevant follow-up question or offer to provide more details.`;
 
 const PMC_SYSTEM_INSTRUCTION = `You are PMC CENTRE AI, a senior technical consultant for paper machine clothing (forming fabrics, press felts, dryer fabrics).
 ${COMMON_RULES}
@@ -36,9 +36,23 @@ function finalizeAnswer(text) {
   if (!text) return "";
   let t = text.trim();
   const last = t.slice(-1);
-  // If the text ends abruptly without punctuation, it likely hit the token limit
-  if (t.length > 100 && ![".", "!", "?", ":", '"', "'", ")"].includes(last)) {
-    t += "...\n\n[Message truncated due to length limit. Would you like me to continue?]";
+  // If the text ends abruptly without terminal punctuation, it likely hit the token limit
+  const endsCleanly = [".", "!", "?", ":", '"', "'", ")", "]"].includes(last);
+  if (t.length > 200 && !endsCleanly) {
+    // Find the last complete sentence
+    const lastSentenceEnd = Math.max(
+      t.lastIndexOf(". "),
+      t.lastIndexOf("? "),
+      t.lastIndexOf("! "),
+      t.lastIndexOf(".\n"),
+      t.lastIndexOf("?\n"),
+      t.lastIndexOf("!\n")
+    );
+    if (lastSentenceEnd > t.length * 0.5) {
+      // Trim to last complete sentence
+      t = t.slice(0, lastSentenceEnd + 1);
+    }
+    t += "\n\n[Message truncated due to length limit. Would you like me to continue?]";
   }
   return t;
 }
@@ -114,7 +128,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
           ...historyTurns,
           { role: "user", content: question }
         ],
-        max_output_tokens: 450
+        max_output_tokens: 1000
       });
 
       answer = r.output_text || "";
@@ -157,7 +171,7 @@ ${kbContext}`;
           ...historyTurns,
           { role: "user", content: userContent }
         ],
-        max_output_tokens: 800
+        max_output_tokens: 1600
       });
 
       answer = finalizeAnswer(r.output_text);
@@ -186,7 +200,7 @@ ${kbContext}`;
               : question
           }
         ],
-        max_output_tokens: 600
+        max_output_tokens: 1000
       });
 
       answer = finalizeAnswer(r.output_text);
