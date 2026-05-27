@@ -190,7 +190,7 @@ ${kbContext}`;
           ...historyTurns,
           { role: "user", content: userContent }
         ],
-        max_output_tokens: 1600
+        max_output_tokens: 2400
       });
 
       answer = finalizeAnswer(r.output_text);
