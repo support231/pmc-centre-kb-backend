@@ -22,7 +22,13 @@ const openai = new OpenAI({
    SYSTEM INSTRUCTIONS
    =============================== */
 
-const COMMON_RULES = `Rules: No Markdown symbols. Use plain text with CAPITAL LETTER headings for emphasis. Never fabricate errors. Always finish your response completely — do not stop mid-sentence or mid-section. If you are running low on space, wrap up with a concise summary and end with a relevant follow-up question or offer to provide more details.`;
+const COMMON_RULES = `Rules: No Markdown symbols. Use plain text with CAPITAL LETTER headings for emphasis. Never fabricate errors. Always finish your response completely — do not stop mid-sentence or mid-section. If you are running low on space, wrap up with a concise summary.
+
+IMPORTANT: At the very end of every response, you MUST include exactly 3 follow-up questions that help the user dive deeper into the topic. Format them exactly like this on separate lines at the end of your response:
+[FOLLOW_UP: Your first follow-up question here?]
+[FOLLOW_UP: Your second follow-up question here?]
+[FOLLOW_UP: Your third follow-up question here?]
+Make these questions specific, practical, and directly related to the topics covered in your answer. They should encourage deeper technical exploration.`;
 
 const PMC_SYSTEM_INSTRUCTION = `You are PMC CENTRE AI, a senior technical consultant for paper machine clothing (forming fabrics, press felts, dryer fabrics).
 ${COMMON_RULES}
@@ -55,6 +61,19 @@ function finalizeAnswer(text) {
     t += "\n\n[Message truncated due to length limit. Would you like me to continue?]";
   }
   return t;
+}
+
+// Extract [FOLLOW_UP: ...] tags from the answer and return clean answer + follow-ups
+function extractFollowUps(text) {
+  const followUps = [];
+  const regex = /\[FOLLOW_UP:\s*(.+?)\]/gi;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    followUps.push(match[1].trim());
+  }
+  // Remove the follow-up tags from the main answer
+  const cleanAnswer = text.replace(/\[FOLLOW_UP:\s*.+?\]/gi, "").trim();
+  return { cleanAnswer, followUps };
 }
 
 /* ===============================
@@ -219,8 +238,12 @@ ${kbContext}`;
         "I need a bit more information to give you a precise answer. Could you please clarify your requirement?";
     }
 
+    // Extract follow-up suggestions from the answer
+    const { cleanAnswer, followUps } = extractFollowUps(answer);
+
     console.log(`[ASK] Tokens: in=${tokenUsage.inputTokens} out=${tokenUsage.outputTokens} total=${tokenUsage.totalTokens}`);
-    res.json({ answer, tokenUsage });
+    console.log(`[ASK] Follow-ups extracted: ${followUps.length}`);
+    res.json({ answer: cleanAnswer, tokenUsage, followUps });
 
   } catch (err) {
     console.error("ASK ERROR:", err);
