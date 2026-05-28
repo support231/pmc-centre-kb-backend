@@ -166,7 +166,7 @@ app.post("/ask", upload.single("file"), async (req, res) => {
     else if (mode === "PMC") {
       // Search the knowledge base for relevant context
       console.log(`[ASK] PMC question received: "${question.slice(0, 80)}..."`);
-      const kbContext = searchKB(question);
+      const kbContext = await searchKB(question);
 
       let systemWithKB = PMC_SYSTEM_INSTRUCTION;
       if (kbContext) {
